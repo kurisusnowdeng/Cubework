@@ -1,0 +1,2 @@
+include *.txt README.md
+recursive-include cubework *.cpp *.h *.cu *.tr *.cuh *.cc
