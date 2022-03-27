@@ -2,26 +2,27 @@ from typing import Optional
 
 ALLOWED_MODES = [None, '1d', '2d', '3d']
 
-GLOBAL = 'global'
+GLOBAL = 'GLOBAL'
 
 # data parallel
-DATA = 'data'
+DATA = 'DATA'
 
 # tensor parallel
-TENSOR = 'tensor'
-NUM_PARTITIONS = 'num_partitions'
+TENSOR = 'TENSOR'
+NUM_PARTITIONS = 'NUM_PARTITIONS'
+VOCAB_PARALLEL = 'VOCAB_PARALLEL'
 
 # 1D Parallel
-PARALLEL_1D = '1d'
+PARALLEL_1D = 'PARALLEL_1D'
 
 # 2D parallel
-PARALLEL_2D_ROW = '2d_row'
-PARALLEL_2D_COL = '2d_col'
+PARALLEL_2D_ROW = 'PARALLEL_2D_ROW'
+PARALLEL_2D_COL = 'PARALLEL_2D_COL'
 
 # 3D parallel
-PARALLEL_3D_INPUT = '3d_input'
-PARALLEL_3D_WEIGHT = '3d_weight'
-PARALLEL_3D_OUTPUT = '3d_output'
+PARALLEL_3D_INPUT = 'PARALLEL_3D_INPUT'
+PARALLEL_3D_WEIGHT = 'PARALLEL_3D_WEIGHT'
+PARALLEL_3D_OUTPUT = 'PARALLEL_3D_OUTPUT'
 
 
 class TensorParallelEnv(object):

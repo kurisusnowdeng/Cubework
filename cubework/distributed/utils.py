@@ -5,34 +5,29 @@ import torch.distributed as dist
 from cubework.global_vars import (DATA, GLOBAL, PARALLEL_1D, PARALLEL_2D_COL, PARALLEL_2D_ROW, PARALLEL_3D_INPUT,
                                   PARALLEL_3D_OUTPUT, PARALLEL_3D_WEIGHT, TENSOR, env)
 
-_INITIALIZE = {
-    '1d': (is_1d_parallel_initialized, init_1d_parallel),
-    '2d': (is_2d_parallel_initialized, init_2d_parallel),
-    '3d': (is_3d_parallel_initialized, init_3d_parallel),
-}
-
-parallel_modes = dict()
-
 
 class ParallelMode(object):
-    def __init__(self, rank, local_rank, world_size, process_group, ranks_in_group, seed=None):
-        self._global_rank = rank
-        self._local_rank = local_rank
-        self._world_size = world_size
-        self._group = process_group
-        self._ranks_in_group = ranks_in_group
+    _name = None
+    _initialized = None
+    _rank = None
+    _local_rank = None
+    _world_size = None
+    _group = None
+    _ranks_in_group = None
+    _rng_state = None
+    _cuda_rng_state = None
 
-        if seed is not None:
-            current_state = torch.cuda.get_rng_state()
-            torch.cuda.manual_seed(seed)
-            self._rng_state = torch.cuda.get_rng_state()
-            torch.cuda.set_rng_state(current_state)
-        else:
-            self._rng_state = torch.cuda.get_rng_state()
+    def __init__(self, name):
+        self._name = name
+        self._initialized = False
 
     @property
-    def global_rank(self):
-        return self._global_rank
+    def name(self):
+        return self._name
+
+    @property
+    def rank(self):
+        return self._rank
 
     @property
     def local_rank(self):
@@ -50,16 +45,51 @@ class ParallelMode(object):
     def ranks_in_group(self):
         return self._ranks_in_group
 
-    def global_rank_by_idx(self, idx):
+    def rank_by_idx(self, idx):
         return self._ranks_in_group[idx]
 
     @property
     def rng_state(self):
         return self._rng_state
 
+    @property
+    def cuda_rng_state(self):
+        return self._cuda_rng_state
 
-def is_initialized():
-    return GLOBAL in parallel_modes
+    def is_initialized(self):
+        return self._initialized
+
+    def init(self, rank, local_rank, world_size, process_group, ranks_in_group, seed=None):
+        self._initialized = True
+        self._rank = rank
+        self._local_rank = local_rank
+        self._world_size = world_size
+        self._group = process_group
+        self._ranks_in_group = ranks_in_group
+
+        if seed is not None:
+            cur_state = torch.get_rng_state()
+            cur_cuda_state = torch.cuda.get_rng_state()
+            torch.manual_seed(seed)
+            self._rng_state = torch.get_rng_state()
+            self._cuda_rng_state = torch.cuda.get_rng_state()
+            torch.set_rng_state(cur_state)
+            torch.cuda.set_rng_state(cur_cuda_state)
+        else:
+            self._rng_state = torch.get_rng_state()
+            self._cuda_rng_state = torch.cuda.get_rng_state()
+
+
+class ParallelManager(object):
+    DATA = ParallelMode(DATA)
+    GLOBAL = ParallelMode(GLOBAL)
+    TENSOR = ParallelMode(TENSOR)
+    PARALLEL_1D = ParallelMode(PARALLEL_1D)
+    PARALLEL_2D_COL = ParallelMode(PARALLEL_2D_COL)
+    PARALLEL_2D_ROW = ParallelMode(PARALLEL_2D_ROW)
+    PARALLEL_3D_INPUT = ParallelMode(PARALLEL_3D_INPUT)
+    PARALLEL_3D_WEIGHT = ParallelMode(PARALLEL_3D_WEIGHT)
+    PARALLEL_3D_OUTPUT = ParallelMode(PARALLEL_3D_OUTPUT)
 
 
 def init_global():
@@ -67,11 +97,7 @@ def init_global():
     rank = dist.get_rank()
     world_size = dist.get_world_size()
 
-    parallel_modes[GLOBAL] = ParallelMode(rank, rank, world_size, None, list(range(world_size)))
-
-
-def is_data_parallel_initialized():
-    return DATA in parallel_modes
+    ParallelManager.GLOBAL.init(rank, rank, world_size, None, list(range(world_size)))
 
 
 def init_data_parallel(data_parallel_size):
@@ -90,55 +116,12 @@ def init_data_parallel(data_parallel_size):
         group = dist.new_group(ranks)
 
         if rank in ranks:
-            local_rank = ranks.index(self.rank)
+            local_rank = ranks.index(rank)
             group_world_size = len(ranks)
             process_group = group
             ranks_in_group = ranks
 
-    parallel_modes[DATA] = ParallelMode(rank, local_rank, group_world_size, process_group, ranks_in_group)
-
-
-def is_tensor_parallel_initialized():
-    is_nd_initialized, _ = _INITIALIZE[env.mode]
-    return TENSOR in parallel_modes and is_nd_initialized()
-
-
-def init_tensor_parallel(tensor_parallel_size, seed):
-    assert dist.is_initialized()
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
-
-    num_tensor_parallel_group = world_size // tensor_parallel_size
-
-    local_rank = None
-    ranks_in_group = None
-    process_group = None
-    group_world_size = None
-    for i in range(num_tensor_parallel_group):
-        ranks = [i * tensor_parallel_size + j for j in range(tensor_parallel_size)]
-        group = dist.new_group(ranks)
-
-        if self.rank in ranks:
-            local_rank = ranks.index(self.rank)
-            group_world_size = len(ranks)
-            process_group = group
-            ranks_in_group = ranks
-    offset = seed + 1024
-    tensor_parallel_seed = offset + local_rank
-
-    parallel_modes[TENSOR] = ParallelMode(rank,
-                                          local_rank,
-                                          group_world_size,
-                                          process_group,
-                                          ranks_in_group,
-                                          seed=tensor_parallel_seed)
-
-    _, init_nd_parallel = _INITIALIZE[env.mode]
-    init_nd_parallel(tensor_parallel_size, tensor_parallel_seed)
-
-
-def is_1d_parallel_initialized():
-    return PARALLEL_1D in parallel_modes
+    ParallelManager.DATA.init(rank, local_rank, group_world_size, process_group, ranks_in_group)
 
 
 def init_1d_parallel(tensor_parallel_size, seed):
@@ -155,25 +138,16 @@ def init_1d_parallel(tensor_parallel_size, seed):
     env.parallel_input_1d = False
 
     for i in range(num_1d_group):
-        ranks = [i * self.tensor_parallel_size + j for j in range(self.tensor_parallel_size)]
+        ranks = [i * tensor_parallel_size + j for j in range(tensor_parallel_size)]
         group = dist.new_group(ranks)
 
-        if self.rank in ranks:
-            local_rank = ranks.index(self.rank)
+        if rank in ranks:
+            local_rank = ranks.index(rank)
             group_world_size = len(ranks)
             process_group = group
             ranks_in_group = ranks
 
-    parallel_modes[PARALLEL_1D] = ParallelMode(rank,
-                                               local_rank,
-                                               group_world_size,
-                                               process_group,
-                                               ranks_in_group,
-                                               seed=seed)
-
-
-def is_2d_parallel_initialized():
-    return PARALLEL_2D_COL in parallel_modes and PARALLEL_2D_ROW in parallel_modes
+    ParallelManager.PARALLEL_1D.init(rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed)
 
 
 def init_2d_parallel(tensor_parallel_size, seed):
@@ -182,7 +156,7 @@ def init_2d_parallel(tensor_parallel_size, seed):
     world_size = dist.get_world_size()
 
     num_2d_group = world_size // tensor_parallel_size
-    summa_dim = int(math.sqrt(self.tensor_parallel_size))
+    summa_dim = int(math.sqrt(tensor_parallel_size))
     env.summa_dim = summa_dim
 
     # column group
@@ -201,12 +175,7 @@ def init_2d_parallel(tensor_parallel_size, seed):
                 process_group = group
                 ranks_in_group = ranks
 
-    parallel_modes[PARALLEL_2D_COL] = ParallelMode(rank,
-                                                   local_rank,
-                                                   group_world_size,
-                                                   process_group,
-                                                   ranks_in_group,
-                                                   seed=seed)
+    ParallelManager.PARALLEL_2D_COL.init(rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed)
 
     # row group
     local_rank = None
@@ -224,18 +193,7 @@ def init_2d_parallel(tensor_parallel_size, seed):
                 process_group = group
                 ranks_in_group = ranks
 
-    parallel_modes[PARALLEL_2D_ROW] = ParallelMode(rank,
-                                                   local_rank,
-                                                   group_world_size,
-                                                   process_group,
-                                                   ranks_in_group,
-                                                   seed=seed)
-
-
-def is_3d_parallel_initialized():
-    return PARALLEL_3D_INPUT in parallel_modes \
-        and PARALLEL_3D_WEIGHT in parallel_modes \
-        and PARALLEL_3D_OUTPUT in parallel_modes
+    ParallelManager.PARALLEL_2D_ROW.init(rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed)
 
 
 def init_3d_parallel(tensor_parallel_size, seed):
@@ -265,12 +223,7 @@ def init_3d_parallel(tensor_parallel_size, seed):
                     process_group = group
                     ranks_in_group = ranks
 
-    parallel_modes[PARALLEL_3D_INPUT] = ParallelMode(rank,
-                                                     local_rank,
-                                                     group_world_size,
-                                                     process_group,
-                                                     ranks_in_group,
-                                                     seed=seed)
+    ParallelManager.PARALLEL_3D_INPUT.init(rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed)
 
     # weight group
     local_rank = None
@@ -290,12 +243,12 @@ def init_3d_parallel(tensor_parallel_size, seed):
                     process_group = group
                     ranks_in_group = ranks
 
-    parallel_modes[PARALLEL_3D_WEIGHT] = ParallelMode(rank,
-                                                      local_rank,
-                                                      group_world_size,
-                                                      process_group,
-                                                      ranks_in_group,
-                                                      seed=seed)
+    ParallelManager.PARALLEL_3D_WEIGHT.init(rank,
+                                            local_rank,
+                                            group_world_size,
+                                            process_group,
+                                            ranks_in_group,
+                                            seed=seed)
 
     # output group
     local_rank = None
@@ -315,9 +268,49 @@ def init_3d_parallel(tensor_parallel_size, seed):
                     process_group = group
                     ranks_in_group = ranks
 
-    parallel_modes[PARALLEL_3D_OUTPUT] = ParallelMode(rank,
-                                                      local_rank,
-                                                      group_world_size,
-                                                      process_group,
-                                                      ranks_in_group,
-                                                      seed=seed)
+    ParallelManager.PARALLEL_3D_OUTPUT.init(rank,
+                                            local_rank,
+                                            group_world_size,
+                                            process_group,
+                                            ranks_in_group,
+                                            seed=seed)
+
+
+_TENSOR_PARALLEL_INIT_FUNCS = {
+    '1d': init_1d_parallel,
+    '2d': init_2d_parallel,
+    '3d': init_3d_parallel,
+}
+
+
+def init_tensor_parallel(tensor_parallel_size, seed):
+    assert dist.is_initialized()
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
+    num_tensor_parallel_group = world_size // tensor_parallel_size
+
+    local_rank = None
+    ranks_in_group = None
+    process_group = None
+    group_world_size = None
+    for i in range(num_tensor_parallel_group):
+        ranks = [i * tensor_parallel_size + j for j in range(tensor_parallel_size)]
+        group = dist.new_group(ranks)
+
+        if rank in ranks:
+            local_rank = ranks.index(rank)
+            group_world_size = len(ranks)
+            process_group = group
+            ranks_in_group = ranks
+    offset = seed + 1024
+    tensor_parallel_seed = offset + local_rank
+
+    ParallelManager.TENSOR.init(rank,
+                                local_rank,
+                                group_world_size,
+                                process_group,
+                                ranks_in_group,
+                                seed=tensor_parallel_seed)
+
+    _TENSOR_PARALLEL_INIT_FUNCS[env.mode](tensor_parallel_size, tensor_parallel_seed)

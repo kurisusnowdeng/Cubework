@@ -1,4 +1,5 @@
 from cubework.global_vars import env
+from cubework.distributed import ParallelManager as pm
 
 
 def get_depth_from_env():
@@ -6,15 +7,15 @@ def get_depth_from_env():
 
 
 def get_input_parallel_mode():
-    return env.input_group_3d
+    return getattr(pm, env.input_group_3d)
 
 
 def get_weight_parallel_mode():
-    return env.weight_group_3d
+    return getattr(pm, env.weight_group_3d)
 
 
 def get_output_parallel_mode():
-    return env.output_group_3d
+    return getattr(pm, env.output_group_3d)
 
 
 def swap_in_out_group():

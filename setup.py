@@ -5,7 +5,7 @@ from setuptools import find_packages, setup
 
 def fetch_requirements(file):
     with open(file, 'r') as f:
-        return [r.strip() for r in f.readlines()]
+        return [r.strip().split(' ')[0] for r in f.readlines()]
 
 
 def fetch_readme():
