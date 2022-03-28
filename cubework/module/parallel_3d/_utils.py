@@ -1,12 +1,10 @@
-from cubework.global_vars import env
-from cubework.distributed import ParallelManager as pm
-from cubework.distributed.utils import ParallelMode
 from typing import Tuple
 
 import torch
 from cubework.distributed import ParallelManager as pm
-from cubework.distributed import (all_gather, all_reduce, broadcast, reduce, reduce_scatter)
+from cubework.distributed import all_gather, all_reduce, broadcast, reduce, reduce_scatter
 from cubework.distributed.utils import ParallelMode
+from cubework.global_vars import env
 from torch import Tensor
 from torch.cuda.amp import custom_bwd, custom_fwd
 
@@ -31,10 +29,12 @@ def swap_in_out_group():
     env.input_group_3d, env.output_group_3d = env.output_group_3d, env.input_group_3d
 
 
-def split_batch_3d(input_: Tensor,
-                   dim: int = 0,
-                   input_parallel_mode: ParallelMode = pm.PARALLEL_3D_INPUT,
-                   weight_parallel_mode: ParallelMode = pm.PARALLEL_3D_WEIGHT) -> Tensor:
+def split_batch_3d(
+    input_: Tensor,
+    dim: int = 0,
+    input_parallel_mode: ParallelMode = pm.PARALLEL_3D_INPUT,
+    weight_parallel_mode: ParallelMode = pm.PARALLEL_3D_WEIGHT,
+) -> Tensor:
     if input_.size(dim) <= 1:
         return input_
     weight_parallel_mode = get_weight_parallel_mode()
@@ -96,11 +96,13 @@ def reduce_scatter_tensor_3d(tensor: Tensor, dim: int, parallel_mode: ParallelMo
 class _ReduceByBatch3D(torch.autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
-    def forward(ctx,
-                input_: Tensor,
-                input_parallel_mode: ParallelMode,
-                weight_parallel_mode: ParallelMode,
-                reduce_mean: bool = False) -> Tensor:
+    def forward(
+        ctx,
+        input_: Tensor,
+        input_parallel_mode: ParallelMode,
+        weight_parallel_mode: ParallelMode,
+        reduce_mean: bool = False,
+    ) -> Tensor:
         output = all_reduce(input_, input_parallel_mode)
         output = all_reduce(output, weight_parallel_mode)
         ctx.reduce_mean = reduce_mean
@@ -119,18 +121,22 @@ class _ReduceByBatch3D(torch.autograd.Function):
             return output_grad, None, None, None
 
 
-def reduce_by_batch_3d(tensor: Tensor,
-                       input_parallel_mode: ParallelMode,
-                       weight_parallel_mode: ParallelMode,
-                       reduce_mean: bool = False) -> Tensor:
+def reduce_by_batch_3d(
+    tensor: Tensor, input_parallel_mode: ParallelMode, weight_parallel_mode: ParallelMode, reduce_mean: bool = False
+) -> Tensor:
     return _ReduceByBatch3D.apply(tensor, input_parallel_mode, weight_parallel_mode, reduce_mean)
 
 
 class _BroadcastWeight3D_FromDiagonal(torch.autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float16)
-    def forward(ctx, input_: Tensor, input_parallel_mode: ParallelMode, weight_parallel_mode: ParallelMode,
-                output_parallel_mode: ParallelMode) -> Tensor:
+    def forward(
+        ctx,
+        input_: Tensor,
+        input_parallel_mode: ParallelMode,
+        weight_parallel_mode: ParallelMode,
+        output_parallel_mode: ParallelMode,
+    ) -> Tensor:
         src_rank = input_parallel_mode.ranks_in_group[output_parallel_mode.local_rank]
         output = broadcast(input_, src_rank, input_parallel_mode)
         ctx.src_rank = src_rank
@@ -150,7 +156,12 @@ class _BroadcastWeight3D_FromDiagonal(torch.autograd.Function):
         return input_grad, None, None, None
 
 
-def broadcast_weight_3d_from_diagonal(tensor: Tensor, input_parallel_mode: ParallelMode,
-                                      weight_parallel_mode: ParallelMode, output_parallel_mode: ParallelMode) -> Tensor:
-    return _BroadcastWeight3D_FromDiagonal.apply(tensor, input_parallel_mode, weight_parallel_mode,
-                                                 output_parallel_mode)
+def broadcast_weight_3d_from_diagonal(
+    tensor: Tensor,
+    input_parallel_mode: ParallelMode,
+    weight_parallel_mode: ParallelMode,
+    output_parallel_mode: ParallelMode,
+) -> Tensor:
+    return _BroadcastWeight3D_FromDiagonal.apply(
+        tensor, input_parallel_mode, weight_parallel_mode, output_parallel_mode
+    )

@@ -20,7 +20,7 @@ class CrossEntropyLoss2D(nn.Module):
 
     def forward(self, logits, targets):
         targets = split_batch_2d(targets)
-        loss = cross_entropy(logits, targets, reduction='none', *self.loss_args, **self.loss_kwargs)
+        loss = cross_entropy(logits, targets, reduction="none", *self.loss_args, **self.loss_kwargs)
         if self.reduction_mean:
             loss = loss.mean()
             loss = reduce_by_batch_2d(loss, True)
@@ -56,7 +56,7 @@ class _VocabParallelCrossEntropy2D(torch.autograd.Function):
             end=logits.size()[0],
         )
         predicted_logits = logits[arange_1d, masked_target]
-        predicted_logits[target_mask] = 0.
+        predicted_logits[target_mask] = 0.0
         dist.all_reduce(predicted_logits, group=pm.PARALLEL_2D_ROW.group)
 
         exp_logits = torch.exp(logits)
@@ -85,7 +85,7 @@ class _VocabParallelCrossEntropy2D(torch.autograd.Function):
 
         # Add the gradient from matching classes.
         arange_1d = torch.arange(start=0, end=grad_2d.size()[0], device=get_current_device())
-        grad_2d[arange_1d, masked_target] -= (1.0 - target_mask.view(-1).float())
+        grad_2d[arange_1d, masked_target] -= 1.0 - target_mask.view(-1).float()
 
         # Finally elementwise multiplication with the output gradients.
         grad_input.mul_(output_grad.unsqueeze(dim=-1))

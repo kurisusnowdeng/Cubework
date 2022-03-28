@@ -8,7 +8,7 @@ class CubeModule(nn.Module):
         self.__dict__ = module.__dict__.copy()
         # copy methods
         for name, attr in module.__class__.__dict__.items():
-            if name not in ['__init__', 'forward'] and callable(attr):
+            if name not in ["__init__", "forward"] and callable(attr):
                 setattr(self, name, getattr(module, name))
         self._forward_func = module.forward
 

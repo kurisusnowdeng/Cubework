@@ -14,10 +14,9 @@ def all_gather(tensor, dim, parallel_mode, async_op=False):
         shape[0] *= depth
         out = torch.empty(shape, dtype=tensor.dtype, device=tensor.device)
         temp = list(torch.chunk(out, depth, dim=0))
-        work = dist.all_gather(tensor_list=temp,
-                               tensor=tensor.transpose(0, dim).contiguous(),
-                               group=parallel_mode.group,
-                               async_op=async_op)
+        work = dist.all_gather(
+            tensor_list=temp, tensor=tensor.transpose(0, dim).contiguous(), group=parallel_mode.group, async_op=async_op
+        )
         out = torch.transpose(out, 0, dim)
     if async_op:
         return out, work

@@ -8,9 +8,9 @@ from .metric_std import calc_acc
 
 _parallel_accuracy = {
     None: calc_acc,
-    '1d': calc_acc,
-    '2d': calc_acc_2d,
-    '3d': calc_acc_3d,
+    "1d": calc_acc,
+    "2d": calc_acc_2d,
+    "3d": calc_acc_3d,
 }
 
 

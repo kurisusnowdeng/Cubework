@@ -9,60 +9,84 @@ from torch import dtype, nn
 from . import init as init
 from ._entry_module import CubeModule
 from .module_std import ClassifierSTD, PatchEmbeddingSTD
-from .parallel_1d import (Classifier1D, Dropout1D, Embedding1D, LayerNorm1D, Linear1D, PatchEmbedding1D,
-                          VocabParallelClassifier1D, VocabParallelEmbedding1D)
-from .parallel_2d import (Classifier2D, Embedding2D, LayerNorm2D, Linear2D, PatchEmbedding2D, VocabParallelClassifier2D,
-                          VocabParallelEmbedding2D, split_batch_2d)
-from .parallel_3d import (Classifier3D, Embedding3D, LayerNorm3D, Linear3D, PatchEmbedding3D, VocabParallelClassifier3D,
-                          VocabParallelEmbedding3D, split_batch_3d)
+from .parallel_1d import (
+    Classifier1D,
+    Dropout1D,
+    Embedding1D,
+    LayerNorm1D,
+    Linear1D,
+    PatchEmbedding1D,
+    VocabParallelClassifier1D,
+    VocabParallelEmbedding1D,
+)
+from .parallel_2d import (
+    Classifier2D,
+    Embedding2D,
+    LayerNorm2D,
+    Linear2D,
+    PatchEmbedding2D,
+    VocabParallelClassifier2D,
+    VocabParallelEmbedding2D,
+    split_batch_2d,
+)
+from .parallel_3d import (
+    Classifier3D,
+    Embedding3D,
+    LayerNorm3D,
+    Linear3D,
+    PatchEmbedding3D,
+    VocabParallelClassifier3D,
+    VocabParallelEmbedding3D,
+    split_batch_3d,
+)
 from .utils import get_tensor_parallel_mode
 
 _parallel_layernorm = {
-    '1d': LayerNorm1D,
-    '2d': LayerNorm2D,
-    '3d': LayerNorm3D,
+    "1d": LayerNorm1D,
+    "2d": LayerNorm2D,
+    "3d": LayerNorm3D,
 }
 
 _parallel_linear = {
-    '1d': Linear1D,
-    '2d': Linear2D,
-    '3d': Linear3D,
+    "1d": Linear1D,
+    "2d": Linear2D,
+    "3d": Linear3D,
 }
 
 _parallel_classifier = {
     None: ClassifierSTD,
-    '1d': Classifier1D,
-    '2d': Classifier2D,
-    '3d': Classifier3D,
+    "1d": Classifier1D,
+    "2d": Classifier2D,
+    "3d": Classifier3D,
 }
 
 _vocab_parallel_classifier = {
-    '1d': VocabParallelClassifier1D,
-    '2d': VocabParallelClassifier2D,
-    '3d': VocabParallelClassifier3D,
+    "1d": VocabParallelClassifier1D,
+    "2d": VocabParallelClassifier2D,
+    "3d": VocabParallelClassifier3D,
 }
 _parallel_embedding = {
-    '1d': Embedding1D,
-    '2d': Embedding2D,
-    '3d': Embedding3D,
+    "1d": Embedding1D,
+    "2d": Embedding2D,
+    "3d": Embedding3D,
 }
 
 _vocab_parallel_embedding = {
-    '1d': VocabParallelEmbedding1D,
-    '2d': VocabParallelEmbedding2D,
-    '3d': VocabParallelEmbedding3D
+    "1d": VocabParallelEmbedding1D,
+    "2d": VocabParallelEmbedding2D,
+    "3d": VocabParallelEmbedding3D,
 }
 
 _parallel_patchembedding = {
     None: PatchEmbeddingSTD,
-    '1d': PatchEmbedding1D,
-    '2d': PatchEmbedding2D,
-    '3d': PatchEmbedding3D,
+    "1d": PatchEmbedding1D,
+    "2d": PatchEmbedding2D,
+    "3d": PatchEmbedding3D,
 }
 
 _parallel_split_batch = {
-    '2d': split_batch_2d,
-    '3d': split_batch_3d,
+    "2d": split_batch_2d,
+    "3d": split_batch_3d,
 }
 
 
@@ -90,14 +114,16 @@ class LayerNorm(CubeModule):
 
 
 class Linear(CubeModule):
-    def __init__(self,
-                 in_features: int,
-                 out_features: int,
-                 bias: bool = True,
-                 dtype: dtype = None,
-                 weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-                 bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
-                 **kwargs) -> None:
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool = True,
+        dtype: dtype = None,
+        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+        **kwargs
+    ) -> None:
         tensor_parallel = get_tensor_parallel_mode()
         if tensor_parallel is None:
             layer = nn.Linear(in_features, out_features, bias=bias).to(dtype).to(get_current_device())
@@ -118,15 +144,17 @@ class Linear(CubeModule):
 
 
 class Classifier(CubeModule):
-    def __init__(self,
-                 in_features: int,
-                 num_classes: int,
-                 weight: nn.Parameter = None,
-                 bias: bool = True,
-                 dtype: dtype = None,
-                 weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-                 bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
-                 vocab_parallel_limit=128):
+    def __init__(
+        self,
+        in_features: int,
+        num_classes: int,
+        weight: nn.Parameter = None,
+        bias: bool = True,
+        dtype: dtype = None,
+        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+        vocab_parallel_limit=128,
+    ):
         tensor_parallel = get_tensor_parallel_mode()
         vocab_parallel = tensor_parallel is not None and num_classes > vocab_parallel_limit
         vocab_parallel = getattr(weight, VOCAB_PARALLEL, vocab_parallel)
@@ -154,19 +182,24 @@ class Classifier(CubeModule):
 
 
 class Embedding(CubeModule):
-    def __init__(self,
-                 num_embeddings: int,
-                 embedding_dim: int,
-                 padding_idx: int = None,
-                 dtype: dtype = None,
-                 weight_initializer: Callable = init.normal_(),
-                 vocab_parallel_limit: int = 2048,
-                 *args,
-                 **kwargs) -> None:
+    def __init__(
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+        padding_idx: int = None,
+        dtype: dtype = None,
+        weight_initializer: Callable = init.normal_(),
+        vocab_parallel_limit: int = 2048,
+        *args,
+        **kwargs
+    ) -> None:
         tensor_parallel = get_tensor_parallel_mode()
         if tensor_parallel is None:
-            embed = nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx, *args,
-                                 **kwargs).to(dtype).to(get_current_device())
+            embed = (
+                nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx, *args, **kwargs)
+                .to(dtype)
+                .to(get_current_device())
+            )
             weight_initializer(embed.weight, fan_in=num_embeddings, fan_out=embedding_dim)
         elif num_embeddings <= vocab_parallel_limit:
             embed = _parallel_embedding[tensor_parallel](
@@ -192,16 +225,18 @@ class Embedding(CubeModule):
 
 
 class PatchEmbedding(CubeModule):
-    def __init__(self,
-                 img_size: int,
-                 patch_size: int,
-                 in_chans: int,
-                 embed_size: int,
-                 dtype: dtype = None,
-                 flatten: bool = True,
-                 weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-                 bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
-                 position_embed_initializer: Callable = init.zeros_()):
+    def __init__(
+        self,
+        img_size: int,
+        patch_size: int,
+        in_chans: int,
+        embed_size: int,
+        dtype: dtype = None,
+        flatten: bool = True,
+        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+        position_embed_initializer: Callable = init.zeros_(),
+    ):
         tensor_parallel = get_tensor_parallel_mode()
         embed = _parallel_patchembedding[tensor_parallel](
             img_size,
@@ -221,14 +256,14 @@ class Dropout(CubeModule):
     def __init__(self, p: float = 0.5, inplace: bool = False) -> None:
         super().__init__()
         self.tensor_parallel = get_tensor_parallel_mode()
-        if self.tensor_parallel == '1d':
+        if self.tensor_parallel == "1d":
             drop = Dropout1D(p, inplace)
         else:
             drop = nn.Dropout(p, inplace)
         super().__init__(drop)
 
     def forward(self, *args):
-        if self.tensor_parallel in [None, '1d']:
+        if self.tensor_parallel in [None, "1d"]:
             return self._forward_func(*args)
         else:
             with seed(pm.TENSOR):

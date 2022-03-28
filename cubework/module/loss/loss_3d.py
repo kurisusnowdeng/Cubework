@@ -6,7 +6,7 @@ from torch.cuda.amp import custom_bwd, custom_fwd
 from torch.nn.functional import cross_entropy
 
 from ..parallel_3d import reduce_by_batch_3d, split_batch_3d
-from ..parallel_3d._utils import (get_input_parallel_mode, get_output_parallel_mode, get_weight_parallel_mode)
+from ..parallel_3d._utils import get_input_parallel_mode, get_output_parallel_mode, get_weight_parallel_mode
 
 
 class CrossEntropyLoss3D(nn.Module):
@@ -23,10 +23,10 @@ class CrossEntropyLoss3D(nn.Module):
         :param logits: Output logits of model
         :param targets: True targets from data
         """
-        targets = split_batch_3d(targets,
-                                 input_parallel_mode=self.input_parallel_mode,
-                                 weight_parallel_mode=self.weight_parallel_mode)
-        loss = cross_entropy(logits, targets, reduction='none', *self.loss_args, **self.loss_kwargs)
+        targets = split_batch_3d(
+            targets, input_parallel_mode=self.input_parallel_mode, weight_parallel_mode=self.weight_parallel_mode
+        )
+        loss = cross_entropy(logits, targets, reduction="none", *self.loss_args, **self.loss_kwargs)
         if self.reduction_mean:
             loss = loss.mean()
             loss = reduce_by_batch_3d(loss, self.input_parallel_mode, self.weight_parallel_mode, True)
@@ -57,7 +57,7 @@ class _VocabParallelCrossEntropy3D(torch.autograd.Function):
         arange_1d = torch.arange(start=0, end=logits.size()[0], device=get_current_device())
         predicted_logits = logits[arange_1d, masked_target]
         predicted_logits = predicted_logits.clone().contiguous().view_as(targets)
-        predicted_logits[target_mask] = 0.
+        predicted_logits[target_mask] = 0.0
         dist.all_reduce(predicted_logits, group=output_parallel_mode.group)
 
         # Loss = log(sum(exp(logits))) - predicted-logit.
@@ -85,7 +85,7 @@ class _VocabParallelCrossEntropy3D(torch.autograd.Function):
 
         # Add the gradient from matching classes.
         arange_1d = torch.arange(start=0, end=grad_2d.size()[0], device=get_current_device())
-        grad_2d[arange_1d, masked_target] -= (1.0 - target_mask.view(-1).float())
+        grad_2d[arange_1d, masked_target] -= 1.0 - target_mask.view(-1).float()
         input_grad.mul_(output_grad.unsqueeze(dim=-1))
 
         return input_grad, None, None, None
@@ -100,9 +100,9 @@ class VocabParallelCrossEntropyLoss3D(nn.Module):
         self.reduction_mean = reduction
 
     def forward(self, logits, targets):
-        targets = split_batch_3d(targets,
-                                 input_parallel_mode=self.input_parallel_mode,
-                                 weight_parallel_mode=self.weight_parallel_mode)
+        targets = split_batch_3d(
+            targets, input_parallel_mode=self.input_parallel_mode, weight_parallel_mode=self.weight_parallel_mode
+        )
         loss = _VocabParallelCrossEntropy3D.apply(logits, targets, self.output_parallel_mode)
         if self.reduction_mean:
             loss = loss.mean()

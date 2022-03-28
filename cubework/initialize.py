@@ -13,19 +13,18 @@ _DEFAULT_SEED = 1024
 def initialize_distributed(parser=None):
     args = parse_args(parser)
 
-    rank = int(os.environ['RANK'])
-    local_rank = int(os.environ['LOCAL_RANK'])
-    world_size = int(os.environ['WORLD_SIZE'])
-    addr = os.environ['MASTER_ADDR']
-    port = int(os.environ['MASTER_PORT'])
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    addr = os.environ["MASTER_ADDR"]
+    port = int(os.environ["MASTER_PORT"])
 
-    init_method = f'tcp://{addr}:{port}'
-    backend = 'nccl' if args.backend is None else args.backend
+    init_method = f"tcp://{addr}:{port}"
+    backend = "nccl" if args.backend is None else args.backend
     dist.init_process_group(rank=rank, world_size=world_size, backend=backend, init_method=init_method)
     cube_dist.init_global()
 
-    data_parallel_size = world_size if args.tensor_parallel_size is None \
-        else world_size // args.tensor_parallel_size
+    data_parallel_size = world_size if args.tensor_parallel_size is None else world_size // args.tensor_parallel_size
     cube_dist.init_data_parallel(data_parallel_size)
 
     seed = args.seed if args.seed is not None else _DEFAULT_SEED

@@ -2,8 +2,18 @@ import math
 
 import torch
 import torch.distributed as dist
-from cubework.global_vars import (DATA, GLOBAL, PARALLEL_1D, PARALLEL_2D_COL, PARALLEL_2D_ROW, PARALLEL_3D_INPUT,
-                                  PARALLEL_3D_OUTPUT, PARALLEL_3D_WEIGHT, TENSOR, env)
+from cubework.global_vars import (
+    DATA,
+    GLOBAL,
+    PARALLEL_1D,
+    PARALLEL_2D_COL,
+    PARALLEL_2D_ROW,
+    PARALLEL_3D_INPUT,
+    PARALLEL_3D_OUTPUT,
+    PARALLEL_3D_WEIGHT,
+    TENSOR,
+    env,
+)
 
 
 class ParallelMode(object):
@@ -243,12 +253,9 @@ def init_3d_parallel(tensor_parallel_size, seed):
                     process_group = group
                     ranks_in_group = ranks
 
-    ParallelManager.PARALLEL_3D_WEIGHT.init(rank,
-                                            local_rank,
-                                            group_world_size,
-                                            process_group,
-                                            ranks_in_group,
-                                            seed=seed)
+    ParallelManager.PARALLEL_3D_WEIGHT.init(
+        rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed
+    )
 
     # output group
     local_rank = None
@@ -268,18 +275,15 @@ def init_3d_parallel(tensor_parallel_size, seed):
                     process_group = group
                     ranks_in_group = ranks
 
-    ParallelManager.PARALLEL_3D_OUTPUT.init(rank,
-                                            local_rank,
-                                            group_world_size,
-                                            process_group,
-                                            ranks_in_group,
-                                            seed=seed)
+    ParallelManager.PARALLEL_3D_OUTPUT.init(
+        rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed
+    )
 
 
 _TENSOR_PARALLEL_INIT_FUNCS = {
-    '1d': init_1d_parallel,
-    '2d': init_2d_parallel,
-    '3d': init_3d_parallel,
+    "1d": init_1d_parallel,
+    "2d": init_2d_parallel,
+    "3d": init_3d_parallel,
 }
 
 
@@ -306,11 +310,8 @@ def init_tensor_parallel(tensor_parallel_size, seed):
     offset = seed + 1024
     tensor_parallel_seed = offset + local_rank
 
-    ParallelManager.TENSOR.init(rank,
-                                local_rank,
-                                group_world_size,
-                                process_group,
-                                ranks_in_group,
-                                seed=tensor_parallel_seed)
+    ParallelManager.TENSOR.init(
+        rank, local_rank, group_world_size, process_group, ranks_in_group, seed=tensor_parallel_seed
+    )
 
     _TENSOR_PARALLEL_INIT_FUNCS[env.mode](tensor_parallel_size, tensor_parallel_seed)
