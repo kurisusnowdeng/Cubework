@@ -28,8 +28,6 @@ class CrossEntropyLoss2D(nn.Module):
 
 
 class _VocabParallelCrossEntropy2D(torch.autograd.Function):
-    ### Modified based on megatron.mpu.cross_entropy ###
-
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, targets):

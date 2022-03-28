@@ -15,14 +15,14 @@ def get_summa_dim_from_env() -> int:
         assert summa_dim > 0, 'SUMMA_DIM must be larger than zero'
         return summa_dim
 
-    except KeyError as e:
+    except KeyError:
         raise EnvironmentError('SUMMA_DIM is not found in the current environment, '
                                'please make sure that you have used the correct process group initializer')
 
 
 def assert_summa_initialization():
     assert pm.PARALLEL_2D_COL.is_initialized() and \
-           pm.PARALLEL_2D_ROW.is_initialized(), \
+        pm.PARALLEL_2D_ROW.is_initialized(), \
         'Both TWO_DIMENSION_COL and TWO_DIMENSION_ROW must be initialized by the process group initializer'
 
 

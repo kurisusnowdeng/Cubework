@@ -139,9 +139,9 @@ class Matmul_AB_2D(torch.autograd.Function):
         col_group = col_parallel_mode.group
 
         src_a = summa_dim * row_rank + data_parallel_rank * pipeline_parallel_size * tensor_parallel_size + \
-                pipeline_parallel_rank * tensor_parallel_size
+            pipeline_parallel_rank * tensor_parallel_size
         src_b = col_rank + data_parallel_rank * pipeline_parallel_size * tensor_parallel_size + \
-                pipeline_parallel_rank * tensor_parallel_size
+            pipeline_parallel_rank * tensor_parallel_size
 
         opa = [None] * 2
         opb = [None] * 2
@@ -242,9 +242,9 @@ class Matmul_ABT_2D(torch.autograd.Function):
         col_group = col_parallel_mode.group
 
         src_b = col_rank + data_parallel_rank * pipeline_parallel_size * tensor_parallel_size + \
-                pipeline_parallel_rank * tensor_parallel_size
+            pipeline_parallel_rank * tensor_parallel_size
         src_c = summa_dim * row_rank + data_parallel_rank * pipeline_parallel_size * tensor_parallel_size + \
-                pipeline_parallel_rank * tensor_parallel_size
+            pipeline_parallel_rank * tensor_parallel_size
 
         opb = [None] * 2
         opr = [None] * 2
@@ -354,9 +354,9 @@ class Matmul_ATB_2D(torch.autograd.Function):
         col_group = col_parallel_mode.group
 
         src_a = summa_dim * row_rank + data_parallel_rank * pipeline_parallel_size * tensor_parallel_size + \
-                pipeline_parallel_rank * tensor_parallel_size
+            pipeline_parallel_rank * tensor_parallel_size
         src_c = col_rank + data_parallel_rank * pipeline_parallel_size * tensor_parallel_size + \
-                pipeline_parallel_rank * tensor_parallel_size
+            pipeline_parallel_rank * tensor_parallel_size
 
         opa = [None] * 2
         opr = [None] * 2
@@ -503,7 +503,6 @@ class _Layernorm_2D(torch.autograd.Function):
     @custom_bwd
     def backward(ctx: Any, output_grad: Tensor) -> Tuple[Tensor, ...]:
         row_parallel_mode = ctx.row_parallel_mode
-        col_parallel_mode = ctx.col_parallel_mode
         x, Var_x = ctx.saved_tensors
         # in here, Var_x = 1 / sqrt(Var[x] + eps), x = (x - E[x]) * Var_x
         output_grad_sum = torch.sum(output_grad, dim=-1, keepdim=True)

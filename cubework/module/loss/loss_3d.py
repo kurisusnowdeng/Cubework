@@ -34,9 +34,6 @@ class CrossEntropyLoss3D(nn.Module):
 
 
 class _VocabParallelCrossEntropy3D(torch.autograd.Function):
-    # Adapted from megatron.mpu.cross_entropy
-    # loss[i] = -logits[i][targets] + log(sum(exp(logits[i])))
-
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, logits, targets, output_parallel_mode):

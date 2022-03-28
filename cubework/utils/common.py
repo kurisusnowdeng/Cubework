@@ -21,6 +21,7 @@ def set_device(rank):
     if torch.cuda.is_available():
         torch.cuda.set_device(rank)
 
+
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
