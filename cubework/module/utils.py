@@ -1,6 +1,7 @@
 import collections.abc
 from itertools import repeat
 
+import torch
 from cubework.global_vars import NUM_PARTITIONS, env
 
 
@@ -22,3 +23,10 @@ def _ntuple(n):
 
 
 to_2tuple = _ntuple(2)
+
+
+def split_tensor(tensor, dim, parallel_mode):
+    if tensor.size(dim) <= 1:
+        return tensor
+    output = torch.chunk(tensor, parallel_mode.world_size, dim=dim)[parallel_mode.local_rank].contiguous()
+    return output

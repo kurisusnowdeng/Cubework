@@ -17,11 +17,10 @@ https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/mpu/mappings.py
 """
 
 import torch
-import torch.distributed as dist
-from colossalai.core import global_context as gpc
-from colossalai.global_variables import tensor_parallel_env as env
+from cubework.distributed import all_gather, all_reduce
+from cubework.global_vars import env
 
-from ..utils import divide
+from ..utils import split_tensor
 
 
 def set_parallel_input(input_parallel: bool):
@@ -32,69 +31,25 @@ def get_parallel_input():
     return env.parallel_input_1d
 
 
-def vocab_range_from_per_partition_vocab_size(per_partition_vocab_size, rank):
-    index_f = rank * per_partition_vocab_size
-    index_l = index_f + per_partition_vocab_size
-    return index_f, index_l
-
-
-def vocab_range_from_global_vocab_size(global_vocab_size, rank, world_size):
-    per_partition_vocab_size = divide(global_vocab_size, world_size)
-    return vocab_range_from_per_partition_vocab_size(per_partition_vocab_size, rank)
-
-
 def _reduce(input_, parallel_mode):
-    # skip if only one rank involved
-    if gpc.get_world_size(parallel_mode) == 1:
-        return input_
-    dist.all_reduce(input_, group=gpc.get_group(parallel_mode))
+    output = all_reduce(input_, parallel_mode)
 
-    return input_
+    return output
 
 
 def _split(input_, parallel_mode, dim=-1):
-    # skip if only one rank involved
-    world_size = gpc.get_world_size(parallel_mode)
-    if world_size == 1:
-        return input_
-
-    # Split along last dimension.
-    dim_size = input_.size(dim)
-    assert dim_size % world_size == 0, \
-        f'The dimension to split ({dim_size}) is not a multiple of world size ({world_size}), ' \
-        f'cannot split tensor evenly'
-
-    tensor_list = torch.split(input_, dim_size // world_size, dim=dim)
-    rank = gpc.get_local_rank(parallel_mode)
-    output = tensor_list[rank].contiguous()
+    output = split_tensor(input_, dim, parallel_mode)
 
     return output
 
 
 def _gather(input_, parallel_mode, dim=-1):
-    # skip if only one rank involved
-    world_size = gpc.get_world_size(parallel_mode)
-    if world_size == 1:
-        return input_
-
-    # all gather
-    rank = gpc.get_local_rank(parallel_mode)
-    tensor_list = [torch.empty_like(input_) for _ in range(world_size)]
-    tensor_list[rank] = input_
-    torch.distributed.all_gather(tensor_list, input_, group=gpc.get_group(parallel_mode))
-
-    # concat
-    output = torch.cat(tensor_list, dim=dim).contiguous()
+    output = all_gather(input_, dim, parallel_mode)
 
     return output
 
 
 class _ReduceGrad(torch.autograd.Function):
-    """
-    Pass the input to the model parallel region.
-    :param input_: input matrix
-    :param parallel_mode: parallel mode
-    """
     @staticmethod
     def symbolic(graph, input_):
         return input_
@@ -110,12 +65,6 @@ class _ReduceGrad(torch.autograd.Function):
 
 
 class _ReduceInput(torch.autograd.Function):
-    """
-    All-reduce the input from the model parallel region.
-    
-    :param input_: input matrix
-    :param parallel_mode: parallel mode
-    """
     @staticmethod
     def symbolic(graph, input_):
         return _reduce(input_)
@@ -130,13 +79,6 @@ class _ReduceInput(torch.autograd.Function):
 
 
 class _SplitForwardGatherBackward(torch.autograd.Function):
-    """
-    Split the input and keep only the corresponding chuck to the rank.
-    
-    :param input_: input matrix
-    :param parallel_mode: parallel mode
-    :param dim: dimension
-    """
     @staticmethod
     def symbolic(graph, input_):
         return _split(input_)
@@ -153,13 +95,6 @@ class _SplitForwardGatherBackward(torch.autograd.Function):
 
 
 class _GatherForwardSplitBackward(torch.autograd.Function):
-    """
-    Gather the input from model parallel region and concatinate.
-    
-    :param input_: input matrix
-    :param parallel_mode: parallel mode
-    :param dim: dimension
-    """
     @staticmethod
     def symbolic(graph, input_):
         return _gather(input_)

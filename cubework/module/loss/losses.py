@@ -1,9 +1,22 @@
 import torch.nn as nn
-from cubework.module import CubeModule, get_tensor_parallel_mode
+from cubework.global_vars import env
 
-_parallel_cross_entropy = {}
+from .._entry_module import CubeModule
+from ..utils import get_tensor_parallel_mode
+from .loss_1d import VocabParallelCrossEntropyLoss1D
+from .loss_2d import CrossEntropyLoss2D, VocabParallelCrossEntropyLoss2D
+from .loss_3d import CrossEntropyLoss3D, VocabParallelCrossEntropyLoss3D
 
-_vocab_parallel_cross_entropy = {}
+_parallel_cross_entropy = {
+    '2d': CrossEntropyLoss2D,
+    '3d': CrossEntropyLoss3D,
+}
+
+_vocab_parallel_cross_entropy = {
+    '1d': VocabParallelCrossEntropyLoss1D,
+    '2d': VocabParallelCrossEntropyLoss2D,
+    '3d': VocabParallelCrossEntropyLoss3D,
+}
 
 
 class CrossEntropyLoss(CubeModule):
