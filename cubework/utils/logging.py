@@ -5,30 +5,44 @@ import torch.distributed as dist
 from rich.logging import RichHandler
 
 
-def get_logger(file=None):
-    logger = logging.getLogger("cubework")
+def _add_file_handler(file, logger):
+    path = os.path.dirname(file)
+    os.makedirs(path, exist_ok=True)
+
+    name, ext = os.path.splitext(file)
+    suffix = ""
+    if dist.is_initialized():
+        suffix = "_rank_" + str(dist.get_rank())
+    file = name + suffix + ext
+
+    file_handler = logging.FileHandler(file, mode="a")
+    file_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter("[%(asctime)s] %(levelname)s > %(message)s")
+    file_handler.setFormatter(formatter)
+
+    logger.addHandler(file_handler)
+
+
+_default_logger = None
+
+
+def init_logger():
+    global _default_logger
+    _default_logger = logging.getLogger("cubework")
 
     level = logging.INFO
     if dist.is_initialized() and dist.get_rank() > 0:
         level = logging.ERROR
-    stream_handler = RichHandler(level=level)
-    logger.addHandler(stream_handler)
 
-    if file is not None:
-        path = os.path.dirname(file)
-        os.makedirs(path, exist_ok=True)
+    _default_logger.setLevel(level)
+    _default_logger.addHandler(RichHandler())
 
-        name, ext = os.path.splitext(file)
-        suffix = ""
-        if dist.is_initialized():
-            suffix = "_rank_" + str(dist.get_rank())
-        file = name + suffix + ext
 
-        file_handler = logging.FileHandler(file, mode="a")
-        file_handler.setLevel(logging.INFO)
-        formatter = logging.Formatter("[%(asctime)s] %(levelname)s > %(message)s")
-        file_handler.setFormatter(formatter)
+def write_logger_to_file(file, logger=None):
+    if logger is None:
+        logger = _default_logger
+    _add_file_handler(file, _default_logger)
 
-        logger.addHandler(file_handler)
 
-    return logger
+def get_logger():
+    return _default_logger

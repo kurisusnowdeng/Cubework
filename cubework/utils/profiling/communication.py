@@ -6,6 +6,12 @@ import torch.distributed as dist
 from torch import Tensor
 from torch.distributed import ReduceOp
 
+torch_all_reduce = dist.all_reduce
+torch_all_gather = dist.all_gather
+torch_reduce_scatter = dist.reduce_scatter
+torch_broadcast = dist.broadcast
+torch_reduce = dist.reduce
+
 
 class CommProfiler(object):
     def __init__(self) -> None:
@@ -25,10 +31,12 @@ class CommProfiler(object):
         dist.broadcast = torch_broadcast
         dist.reduce = torch_reduce
 
+        return self.total_count, self.total_volume, self.total_time
+
     def new(self, vol):
         self.running_ops += 1
-        self.total_cnt += 1
-        self.total_vol += vol
+        self.total_count += 1
+        self.total_volume += vol
         if self.start_time is None:
             self.start_time = time.time()
 
@@ -40,9 +48,9 @@ class CommProfiler(object):
 
     def reset(self):
         self.running_ops = 0
-        self.total_time = 0
-        self.total_vol = 0
-        self.total_cnt = 0
+        self.total_time = 0.0
+        self.total_volume = 0.0
+        self.total_count = 0
         self.start_time = None
 
 
@@ -55,13 +63,6 @@ class CommHandler(object):
     def wait(self):
         self.work.wait()
         self.prof.finish()
-
-
-torch_all_reduce = dist.all_reduce
-torch_all_gather = dist.all_gather
-torch_reduce_scatter = dist.reduce_scatter
-torch_broadcast = dist.broadcast
-torch_reduce = dist.reduce
 
 
 def all_reduce(

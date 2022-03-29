@@ -51,7 +51,7 @@ class MemoryTracker(object):
                         list(map(lambda record: f"[ {record[0]} ] rank {rank} : {record[1]:.3f} MB" + "\n", records))
                     )
 
-            return gpu_usage
+            return max(gpu_usage)
 
     def reset(self):
         self.keep_measuring = False
