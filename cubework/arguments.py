@@ -1,5 +1,11 @@
 import argparse
 
+_ARGS = None
+
+
+def get_args():
+    return _ARGS
+
 
 def parse_args(parser=None):
     if parser is None:
@@ -10,4 +16,6 @@ def parse_args(parser=None):
     parser.add_argument("--backend", type=str, default="nccl")
     parser.add_argument("--seed", type=int)
 
-    return parser.parse_args()
+    global _ARGS
+    _ARGS = parser.parse_args()
+    return _ARGS

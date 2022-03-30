@@ -3,7 +3,7 @@ import time
 
 import cubework
 import torch
-from cubework.arguments import parse_args
+from cubework.arguments import get_args
 from cubework.distributed import ParallelManager as pm
 from cubework.distributed.collective import all_reduce
 from cubework.utils import (
@@ -57,6 +57,15 @@ def _data_parallel_mean(tensor):
     return out
 
 
+def _move_to_cuda(x):
+    if isinstance(x, dict):
+        return {k: _move_to_cuda(v) for k, v in x.items()}
+    elif isinstance(x, (tuple, list)):
+        return type(x)(_move_to_cuda(v) for v in x)
+    else:
+        return x.to(get_current_device())
+
+
 def _train(epoch, args):
     model.train()
 
@@ -86,31 +95,18 @@ def _train(epoch, args):
     for i in progress:
         fwd_start = time.time()
 
-        batch = next(data_iter)
+        batch = _move_to_cuda(next(data_iter))
 
         labels = batch.pop("labels")
-        batch_size = None
-        batch_tokens = None
-        if isinstance(labels, torch.Tensor):
-            labels = labels.to(get_current_device())
-            batch_size = labels.size(0)
-            batch_tokens = labels.numel()
-        else:
-            for k, v in labels.items():
-                labels[k] = v.to(get_current_device())
-                if batch_size is None:
-                    batch_size = v.size(0)
-                if batch_tokens is None:
-                    batch_tokens = v.numel()
-
-        for k, v in batch.items():
-            batch[k] = v.to(get_current_device())
 
         if args.use_mixed_precision:
             with torch.cuda.amp.autocast():
                 outputs = model(**batch)
         else:
             outputs = model(**batch)
+
+        batch_size = outputs.size(0)
+        batch_tokens = outputs.size(0) * outputs.size(1)
 
         loss = criterion(outputs, labels)
         total_loss += loss
@@ -225,30 +221,18 @@ def _test(epoch, args):
         for _ in progress:
             batch_start = time.time()
 
-            batch = next(data_iter)
+            batch = _move_to_cuda(next(data_iter))
 
             labels = batch.pop("labels")
-            batch_size = None
-            batch_tokens = None
-            if isinstance(labels, torch.Tensor):
-                labels = labels.to(get_current_device())
-                batch_size = labels.size(0)
-                batch_tokens = labels.numel()
-            else:
-                for k, v in labels.items():
-                    labels[k] = v.to(get_current_device())
-                    if batch_size is None:
-                        batch_size = v.size(0)
-                    if batch_tokens is None:
-                        batch_tokens = v.numel()
 
-            for k, v in batch.items():
-                batch[k] = v.to(get_current_device())
             if args.use_mixed_precision:
                 with torch.cuda.amp.autocast():
                     outputs = model(**batch)
             else:
                 outputs = model(**batch)
+
+            batch_size = outputs.size(0)
+            batch_tokens = outputs.size(0) * outputs.size(1)
 
             loss = criterion(outputs, labels)
             eval_res = metric(outputs, labels, loss)
@@ -312,18 +296,21 @@ def get_parser():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--model_name", "--m", type=str)
+    parser.add_argument("--dataset_path", "--data", type=str)
+    parser.add_argument("--tokenizer_path", "--token", type=str)
 
     parser.add_argument("--batch_size", "--bs", type=int)
     parser.add_argument("--num_epochs", "--n_epoch", type=int)
+    parser.add_argument("--warmup_epochs", "--n_warm", type=int, default=0)
     parser.add_argument("--steps_per_epoch", "--n_step", type=int)
     parser.add_argument("--learning_rate", "--lr", type=float)
     parser.add_argument("--weight_decay", "--decay", type=float)
 
-    parser.add_argument("--use_activation_checkpoint", "--ac", action="store_true", default=False)
+    parser.add_argument("--use_activation_checkpoint", "--ckpt", action="store_true", default=False)
 
-    parser.add_argument("--gradient_clipping", "--gc", type=float, default=0.0)
+    parser.add_argument("--gradient_clipping", "--clip", type=float, default=0.0)
 
-    parser.add_argument("--gradient_accumulation", "--ga", type=int, default=1)
+    parser.add_argument("--gradient_accumulation", "--ac", type=int, default=1)
 
     parser.add_argument("--use_mixed_precision", "--amp", action="store_true", default=False)
     parser.add_argument("--fp16_initial_scale", type=float, default=2**15)
@@ -341,15 +328,14 @@ def get_parser():
 def train():
     parser = get_parser()
     cubework.initialize_distributed(parser)
-
-    args = parse_args(parser)
+    args = get_args()
 
     logger = get_logger()
     if args.log_file is not None:
         write_logger_to_file(logger)
 
     model_type = args.model_name.split("_")[0]
-    assert model_type in ["gpt2", "vit"], f"No support for {model}."
+    assert model_type in ["gpt2", "vit"], f"No support for {args.model_name}."
 
     global model, train_data, test_data, criterion, metric, optimizer, lr_scheduler
     model, train_data, test_data, criterion, metric, optimizer, lr_scheduler = _builder[model_type](args)
