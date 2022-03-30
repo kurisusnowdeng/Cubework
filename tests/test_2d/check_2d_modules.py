@@ -1,16 +1,14 @@
 import torch
 from cubework.distributed import ParallelManager as pm
-from cubework.module import (
+from cubework.module.loss.loss_2d import CrossEntropyLoss2D, VocabParallelCrossEntropyLoss2D
+from cubework.module.module_std import ClassifierSTD, PatchEmbeddingSTD
+from cubework.module.parallel_2d import (
     Classifier2D,
-    ClassifierSTD,
-    CrossEntropyLoss2D,
     Embedding2D,
     LayerNorm2D,
     Linear2D,
     PatchEmbedding2D,
-    PatchEmbeddingSTD,
     VocabParallelClassifier2D,
-    VocabParallelCrossEntropyLoss2D,
     VocabParallelEmbedding2D,
 )
 from cubework.utils import get_current_device, get_logger

@@ -2,14 +2,14 @@ import torch
 import torch.distributed as dist
 from cubework.distributed import ParallelManager as pm
 from cubework.global_vars import env
-from cubework.module import (
+from cubework.module.loss.loss_1d import VocabParallelCrossEntropyLoss1D
+from cubework.module.module_std import ClassifierSTD
+from cubework.module.parallel_1d import (
     Classifier1D,
-    ClassifierSTD,
     Embedding1D,
     Linear1D_Col,
     Linear1D_Row,
     VocabParallelClassifier1D,
-    VocabParallelCrossEntropyLoss1D,
     VocabParallelEmbedding1D,
 )
 from cubework.utils import get_current_device, get_logger
@@ -25,7 +25,7 @@ VOCAB_SIZE = 16
 
 
 def check_equal(A, B):
-    eq = torch.allclose(A, B, rtol=1e-3, atol=1e-2)
+    eq = torch.allclose(A, B, rtol=1e-3, atol=1e-1)
     assert eq
     return eq
 

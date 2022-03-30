@@ -1,4 +1,5 @@
 import random
+import socket
 from contextlib import contextmanager
 
 import numpy as np
@@ -33,3 +34,16 @@ def get_current_device():
         return torch.cuda.current_device()
     else:
         return torch.device("cpu")
+
+
+def free_port():
+    while True:
+        try:
+            sock = socket.socket()
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            port = random.randint(20000, 65000)
+            sock.bind(("localhost", port))
+            sock.close()
+            return port
+        except Exception:
+            continue

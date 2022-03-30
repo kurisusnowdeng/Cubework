@@ -1,17 +1,15 @@
 import time
 
 import torch
-from colossalai.nn import (
+from cubework.module.loss.loss_3d import CrossEntropyLoss3D, VocabParallelCrossEntropyLoss3D
+from cubework.module.module_std import ClassifierSTD, PatchEmbeddingSTD
+from cubework.module.parallel_3d import (
     Classifier3D,
-    ClassifierSTD,
-    CrossEntropyLoss3D,
     Embedding3D,
     LayerNorm3D,
     Linear3D,
     PatchEmbedding3D,
-    PatchEmbeddingSTD,
     VocabParallelClassifier3D,
-    VocabParallelCrossEntropyLoss3D,
     VocabParallelEmbedding3D,
 )
 from cubework.module.parallel_3d._utils import (

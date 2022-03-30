@@ -1,28 +1,29 @@
-import math
+import argparse
 import time
 
 import cubework
-from cubework.arguments import parse_args
-from cubework.distributed.collective import all_reduce
 import torch
+from cubework.arguments import parse_args
+from cubework.distributed import ParallelManager as pm
+from cubework.distributed.collective import all_reduce
 from cubework.utils import (
-    MemoryTracker,
     CommProfiler,
-    get_current_device,
-    get_logger,
-    write_logger_to_file,
+    MemoryTracker,
     calc_model_size,
     calc_tflops,
     clip_grad_norm,
+    get_current_device,
+    get_logger,
+    write_logger_to_file,
 )
-from cubework.distributed import ParallelManager as pm
 from tqdm import tqdm
-import argparse
-from .gpt2 import build_gpt2
 
+from gpt2 import build_gpt2
+from vit import build_vit
 
 _builder = {
     "gpt2": build_gpt2,
+    "vit": build_vit,
 }
 
 
@@ -125,8 +126,8 @@ def _train(epoch, args):
 
         if (i + 1) % args.gradient_accumulation or i + 1 == num_steps:
             if scaler is not None:
-                scaler.unscale_(optimizer)
                 if args.gradient_clipping > 0:
+                    scaler.unscale_(optimizer)
                     clip_grad_norm(model.parameters(), args.gradient_clipping)
                 scaler.step(optimizer)
                 scaler.update()
@@ -150,13 +151,20 @@ def _train(epoch, args):
         total_time += batch_time
 
         if pm.GLOBAL.rank == 0:
+            batch_tflops = calc_tflops(
+                numel,
+                batch_tokens * pm.DATA.world_size,
+                batch_time,
+                with_backward=True,
+                checkpoint=args.use_activation_checkpoint,
+            )
             progress.set_postfix(
                 loss=loss.item(),
                 lr=lr_scheduler.get_last_lr()[0],
                 time_forward=fwd_time,
                 time_backward=bwd_time,
-                throughput=batch_size * pm.GLOBAL.world_size / (batch_time + 1e-12),
-                tflops=calc_tflops(batch_time, batch_tokens * pm.GLOBAL.world_size),
+                throughput=batch_size * pm.DATA.world_size / (batch_time + 1e-12),
+                tflops=batch_tflops,
             )
 
     if mem_tracker is not None:
@@ -202,7 +210,7 @@ def _test(epoch, args):
     total_steps = 0
     total_samples = torch.zeros(()).to(torch.int).to(get_current_device())
     total_tokens = torch.zeros(()).to(torch.int).to(get_current_device())
-    total_metric = 0.0
+    metric.reset()
 
     data_iter = iter(test_data)
 
@@ -243,6 +251,7 @@ def _test(epoch, args):
                 outputs = model(**batch)
 
             loss = criterion(outputs, labels)
+            eval_res = metric(outputs, labels, loss)
             total_loss += loss
 
             batch_end = time.time()
@@ -255,65 +264,76 @@ def _test(epoch, args):
             total_time += batch_time
 
             if pm.GLOBAL.rank == 0:
+                batch_tflops = calc_tflops(
+                    numel,
+                    batch_tokens * pm.DATA.world_size,
+                    batch_time,
+                    with_backward=False,
+                    checkpoint=False,
+                )
                 metrics = dict(
                     loss=loss.item(),
                     step_time=batch_time,
-                    throughput=batch_size * world_size / (batch_time + 1e-12),
-                    tflops=get_tflops(batch_time, batch_tokens * world_size),
+                    throughput=batch_size * pm.DATA.world_size / (batch_time + 1e-12),
+                    tflops=batch_tflops,
                 )
-                if evaluation == "ppl":
-                    metrics["perplexity"] = math.exp(loss.item())
-                elif evaluation == "acc":
-                    if not isinstance(labels, torch.Tensor):
-                        labels = labels["targets_a"]
-                    batch_correct = torch.sum(labels == torch.argmax(outputs, dim=-1)).item()
-                    metrics["accuracy"] = batch_correct / batch_size
-                    correct += batch_correct
-                else:
-                    raise ValueError(f"Invalid evaluation method {evaluation}")
+                metrics[metric.name.lower()] = eval_res
                 progress.set_postfix(**metrics)
 
-    peak_mem = None
-    if mem_monitor is not None:
-        peak_mem = max(mem_monitor.finish())
+    if mem_tracker is not None:
+        peak_mem = mem_tracker.stop()
 
-    all_reduce(test_loss)
-    reduced_loss = test_loss.item() / (world_size * num_steps)
-    all_reduce(num_samples)
-    all_reduce(num_tokens)
-    if evaluation == "acc":
-        all_reduce(correct)
+    if comm_profiler is not None:
+        _, comm_vol, comm_time = comm_profiler.stop()
 
-    msg = f"[Epoch {epoch} / Test]: Loss = {reduced_loss:.3f}"
-    if evaluation == "ppl":
-        msg += f" | Perplexity = {math.exp(reduced_loss):.3f}"
-    else:
-        msg += f" | Accuracy = {correct.item() * 100 / num_samples.item():.3f} %"
-    msg += f" | Throughput = {num_samples.item() / (used_time + 1e-12):.3f} samples/sec"
-    msg += f" | TFLOPS = {get_tflops(used_time, num_tokens.item()):.3f}"
-    if peak_mem is not None:
-        msg += f" | Peak memory = {peak_mem / 1024:.3f} GB."
-    print_log(msg)
+    total_loss = _data_parallel_mean(total_loss)
+    total_samples = _data_parallel_sum(total_samples)
+    total_tokens = _data_parallel_sum(total_tokens)
+
+    msg = f"[Epoch {epoch} / Train]: Loss = {total_loss.item() / num_steps:.3f}"
+    msg += f" | {metric.name} = {metric.value().item():.5f}"
+    msg += f" | Throughput = {total_samples.item() / (total_time + 1e-12):.3f} samples/sec"
+    tflops = calc_tflops(
+        numel, total_tokens.item(), total_time, with_backward=True, checkpoint=args.use_activation_checkpoint
+    )
+    msg += f" | TFLOPS = {tflops:.3f}"
+    if mem_tracker is not None:
+        msg += f" | Peak memory = {peak_mem / 1024:.3f} GB"
+    if comm_profiler is not None:
+        msg += (
+            f"\n[Epoch {epoch} / Train]: Communication time = {comm_time:.3f} s, "
+            + f"ratio = {comm_time * 100 / (total_time + 1e-12):.3f} %, "
+            + f"avg bandwidth = {(comm_vol / 1024**2) / (comm_time + 1e-12):.3f} MB/s"
+        )
+    logger.info(msg)
 
 
 def get_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--use_mem_tracker", action="store_true")
-    parser.add_argument("--use_comm_profiler", action="store_true")
+
     parser.add_argument("--model_name", "--m", type=str)
+
     parser.add_argument("--batch_size", "--bs", type=int)
     parser.add_argument("--num_epochs", "--n_epoch", type=int)
     parser.add_argument("--steps_per_epoch", "--n_step", type=int)
     parser.add_argument("--learning_rate", "--lr", type=float)
     parser.add_argument("--weight_decay", "--decay", type=float)
+
     parser.add_argument("--use_activation_checkpoint", "--ac", action="store_true", default=False)
+
     parser.add_argument("--gradient_clipping", "--gc", type=float, default=0.0)
+
     parser.add_argument("--gradient_accumulation", "--ga", type=int, default=1)
-    parser.add_argument("--use_mixed_precision", "--amp", action="store_true")
+
+    parser.add_argument("--use_mixed_precision", "--amp", action="store_true", default=False)
     parser.add_argument("--fp16_initial_scale", type=float, default=2**15)
     parser.add_argument("--fp16_growth_factor", type=float, default=2.0)
     parser.add_argument("--fp16_backoff_factor", type=float, default=0.5)
     parser.add_argument("--fp16_growth_interval", type=int, default=1000)
+
+    parser.add_argument("--use_mem_tracker", "--prof_mem", action="store_true", default=False)
+    parser.add_argument("--use_comm_profiler", "--prof_comm", action="store_true", default=False)
+
     parser.add_argument("--log_file", type=str)
     return parser
 
@@ -331,7 +351,7 @@ def train():
     model_type = args.model_name.split("_")[0]
     assert model_type in ["gpt2", "vit"], f"No support for {model}."
 
-    global model, train_data, test_data, criterion, optimizer, lr_scheduler
+    global model, train_data, test_data, criterion, metric, optimizer, lr_scheduler
     model, train_data, test_data, criterion, metric, optimizer, lr_scheduler = _builder[model_type](args)
 
     global scaler

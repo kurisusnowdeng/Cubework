@@ -1,13 +1,15 @@
+from abc import abstractmethod
+
 import torch
 import torch.nn as nn
+from cubework.distributed import ParallelManager as pm
+from cubework.distributed import all_reduce
+from cubework.utils import get_current_device
 
 from ..utils import get_tensor_parallel_mode
 from .metric_2d import calc_acc_2d
 from .metric_3d import calc_acc_3d
 from .metric_std import calc_acc
-from cubework.utils import get_current_device
-from cubework.distributed import all_reduce
-from cubework.distributed import ParallelManager as pm
 
 _parallel_accuracy = {
     None: calc_acc,
@@ -17,25 +19,65 @@ _parallel_accuracy = {
 }
 
 
-class Accuracy(nn.Module):
-    def __init__(self):
+class Metric(nn.Module):
+    def __init__(self, name):
         super().__init__()
+        self.name = name
+
+    @abstractmethod
+    def reset(self):
+        ...
+
+    @abstractmethod
+    def forward(self, logits, targets, loss):
+        ...
+
+    @abstractmethod
+    def value(self):
+        ...
+
+
+class Accuracy(Metric):
+    def __init__(self):
+        super().__init__("Accuracy")
         tensor_parallel = get_tensor_parallel_mode()
         self.acc = _parallel_accuracy[tensor_parallel]
+        self.reset()
+
+    def reset(self):
+        self.total_correct = torch.zeros(()).to(torch.int).to(get_current_device())
+        self.total_samples = torch.zeros(()).to(torch.int).to(get_current_device())
 
     def forward(self, logits, targets, loss):
         with torch.no_grad():
-            batch_size = torch.LongTensor(targets.size(0)).to(get_current_device())
+            batch_size = targets.size(0)
             correct = self.acc(logits, targets)
-            reduced_values = all_reduce(torch.stack([correct, batch_size]), pm.DATA)
+            self.total_samples += batch_size
+            self.total_correct += correct
+            return correct / batch_size
+
+    def value(self):
+        with torch.no_grad():
+            reduced_values = all_reduce(torch.stack([self.total_correct, self.total_samples]), pm.DATA)
             return reduced_values[0] / reduced_values[1]
 
 
-class Perplexity(nn.Module):
+class Perplexity(Metric):
     def __init__(self):
-        super().__init__()
+        super().__init__("Perplexity")
+        self.reset()
+
+    def reset(self):
+        self.cnt = 0
+        self.total_loss = torch.zeros(()).to(torch.float).to(get_current_device())
 
     def forward(self, logits, targets, loss):
         with torch.no_grad():
-            reduced_loss = all_reduce(loss, pm.DATA) / pm.DATA.world_size
+            self.cnt += 1
+            self.total_loss += loss
+            return torch.exp(loss)
+
+    def value(self):
+        with torch.no_grad():
+            reduced_loss = all_reduce(self.total_loss, pm.DATA) / (self.cnt * pm.DATA.world_size)
             return torch.exp(reduced_loss)
