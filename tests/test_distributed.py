@@ -5,7 +5,7 @@ from cubework.distributed import broadcast
 from functools import partial
 import torch.multiprocessing as mp
 import os
-from cubework.utils import seed, get_current_device
+from cubework.utils import seed, get_current_device, free_port
 import sys
 
 
@@ -34,7 +34,7 @@ def test_distributed():
     sys.argv.append(f"--tp={tensor_parallel}")
     sys.argv.append(f"--tp_size={tensor_parallel_size}")
 
-    run_func = partial(run, world_size=world_size, port=23333)
+    run_func = partial(run, world_size=world_size, port=free_port())
     mp.spawn(run_func, nprocs=world_size)
 
 

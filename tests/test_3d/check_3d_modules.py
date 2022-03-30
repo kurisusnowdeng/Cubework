@@ -32,7 +32,7 @@ VOCAB_SIZE = 16
 def check_equal(A, B):
     eq = torch.allclose(A, B, rtol=1e-3, atol=1e-2)
     assert eq
-    return
+    return eq
 
 
 def check_linear():
@@ -169,8 +169,7 @@ def check_layernorm():
     logger.info(
         "layer norm forward: pass | {0} --> {1} | {2:.3f} s".format(
             tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
-        ),
-        logger,
+        )
     )
 
     A_master = A_master.clone()
@@ -259,7 +258,6 @@ def check_classifier_no_given_weight():
         "classifier (no given weight) forward: pass | {0} --> {1} | {2:.3f} s".format(
             tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
         ),
-        logger,
     )
     A_master = A_master.clone()
     A_master.requires_grad = True
@@ -364,7 +362,6 @@ def check_vocab_parallel_classifier_no_given_weight():
         "vocab parallel classifier (no given weight) forward: pass | {0} --> {1} | {2:.3f} s".format(
             tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
         ),
-        logger,
     )
     A_master = A_master.clone()
     A_master.requires_grad = True
@@ -466,7 +463,6 @@ def check_classifier_given_embed_weight():
         "classifier (given embed weight) forward: pass | {0} --> {1} | {2:.3f} s".format(
             tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
         ),
-        logger,
     )
     A_master = A_master.clone()
     C_master = layer_master(embed_master(A_master))
@@ -553,7 +549,6 @@ def check_vocab_parallel_classifier_given_embed_weight():
         "vocab parallel classifier (given embed weight) forward: pass | {0} --> {1} | {2:.3f} s".format(
             tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
         ),
-        logger,
     )
     A_master = A_master.clone()
     C_master = layer_master(embed_master(A_master))
@@ -637,7 +632,6 @@ def check_patch_embed():
         "patch embed forward: pass | {0} --> {1} | {2:.3f} s".format(
             tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
         ),
-        logger,
     )
 
     A_master = A_master.clone()
@@ -724,8 +718,7 @@ def check_embed():
     torch.cuda.synchronize()
     fwd_end = time.time()
     logger.info(
-        "embed forward: pass | {0} --> {1} | {2:.3f} s".format(tuple(A.shape), tuple(out.shape), fwd_end - fwd_start),
-        ranks=[0],
+        "embed forward: pass | {0} --> {1} | {2:.3f} s".format(tuple(A.shape), tuple(out.shape), fwd_end - fwd_start)
     )
 
     A_master = A_master.clone()
@@ -746,7 +739,7 @@ def check_embed():
     out.backward(grad)
     torch.cuda.synchronize()
     bwd_end = time.time()
-    logger.info("embed backward: pass | {:.3f} s".format(bwd_end - bwd_start), ranks=[0])
+    logger.info("embed backward: pass | {:.3f} s".format(bwd_end - bwd_start))
 
     grad_master = grad_master.clone()
     C_master.backward(grad_master)
@@ -800,8 +793,7 @@ def check_vocab_parallel_embed():
     logger.info(
         "vocab parallel embed forward: pass | {0} --> {1} | {2:.3f} s".format(
             tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
-        ),
-        ranks=[0],
+        )
     )
 
     A_master = A_master.clone()
@@ -822,7 +814,7 @@ def check_vocab_parallel_embed():
     out.backward(grad)
     torch.cuda.synchronize()
     bwd_end = time.time()
-    logger.info("vocab parallel embed backward: pass | {:.3f} s".format(bwd_end - bwd_start), ranks=[0])
+    logger.info("vocab parallel embed backward: pass | {:.3f} s".format(bwd_end - bwd_start))
 
     grad_master = grad_master.clone()
     C_master.backward(grad_master)
@@ -870,8 +862,7 @@ def check_loss():
     logger.info(
         "cross entropy loss forward: pass | {0} --> {1} | {2:.3f} s".format(
             tuple(out.shape), tuple(loss.shape), fwd_end - fwd_start
-        ),
-        ranks=[0],
+        )
     )
 
     out_master = out_master.clone()
@@ -882,7 +873,7 @@ def check_loss():
     bwd_start = time.time()
     loss.backward()
     bwd_end = time.time()
-    logger.info("cross entropy loss backward: pass | {:.3f} s".format(bwd_end - bwd_start), ranks=[0])
+    logger.info("cross entropy loss backward: pass | {:.3f} s".format(bwd_end - bwd_start))
 
     loss_master.backward()
     out_grad = out_master.grad
@@ -928,8 +919,7 @@ def check_vocab_parallel_loss():
     logger.info(
         "vocab parallel cross entropy loss forward: pass | {0} --> {1} | {2:.3f} s".format(
             tuple(out.shape), tuple(loss.shape), fwd_end - fwd_start
-        ),
-        ranks=[0],
+        )
     )
 
     out_master = out_master.clone()
@@ -940,7 +930,7 @@ def check_vocab_parallel_loss():
     bwd_start = time.time()
     loss.backward()
     bwd_end = time.time()
-    logger.info("vocab parallel cross entropy loss backward: pass | {:.3f} s".format(bwd_end - bwd_start), ranks=[0])
+    logger.info("vocab parallel cross entropy loss backward: pass | {:.3f} s".format(bwd_end - bwd_start))
 
     loss_master.backward()
     out_grad = out_master.grad

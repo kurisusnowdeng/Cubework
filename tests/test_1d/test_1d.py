@@ -4,6 +4,7 @@ from functools import partial
 
 import cubework
 import torch.multiprocessing as mp
+from cubework.utils import free_port
 
 from check_1d_modules import (
     check_classifier_given_embed_weight,
@@ -37,16 +38,16 @@ def run(rank, world_size, port):
     check_vocab_parallel_loss()
 
 
-def test_distributed():
+def test_1d():
     world_size = 4
     tensor_parallel = "1d"
     tensor_parallel_size = 4
     sys.argv.append(f"--tp={tensor_parallel}")
     sys.argv.append(f"--tp_size={tensor_parallel_size}")
 
-    run_func = partial(run, world_size=world_size, port=23333)
+    run_func = partial(run, world_size=world_size, port=free_port())
     mp.spawn(run_func, nprocs=world_size)
 
 
 if __name__ == "__main__":
-    test_distributed()
+    test_1d()

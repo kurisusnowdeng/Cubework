@@ -14,8 +14,8 @@ from cubework.module.parallel_2d import (
 from cubework.utils import get_current_device, get_logger
 
 DEPTH = 2
-BATCH_SIZE = 8
-SEQ_LENGTH = 8
+BATCH_SIZE = 4
+SEQ_LENGTH = 1
 HIDDEN_SIZE = 8
 NUM_CLASSES = 8
 VOCAB_SIZE = 16
@@ -115,7 +115,7 @@ def check_layernorm():
     device = get_current_device()
     dtype = torch.float32
     INPUT_SIZE = HIDDEN_SIZE
-    EPS = 1e-12
+    EPS = 1e-5
 
     j = pm.PARALLEL_2D_ROW.local_rank
     i = pm.PARALLEL_2D_COL.local_rank

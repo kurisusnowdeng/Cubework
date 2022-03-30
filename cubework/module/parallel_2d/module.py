@@ -17,7 +17,7 @@ from torch.nn import Parameter
 
 from .. import init
 from ..utils import set_tensor_parallel_attribute_by_partition, to_2tuple
-from ._operation import Matmul_AB_2D, Matmul_ABT_2D, add_bias_2d, classifier_2d, layernorm_2d
+from ._operation import summa_AB, summa_ABT, add_bias_2d, classifier_2d, layernorm_2d
 from ._utils import (
     all_gather_tensor_2d,
     assert_summa_initialization,
@@ -87,19 +87,13 @@ class Linear2D(nn.Module):
         # output: [m/q, n/q, h/q]
         out_shape = x.shape[:-1] + (self.hidden_size_per_partition,)
 
-        output = Matmul_AB_2D.apply(
+        output = summa_AB(
             x,
             self.weight,
             self.summa_dim,
             out_shape,
-            self.row_rank,
-            self.col_rank,
             pm.PARALLEL_2D_ROW,
             pm.PARALLEL_2D_COL,
-            self.data_parallel_rank,
-            self.pipeline_parallel_rank,
-            self.pipeline_parallel_size,
-            self.tensor_parallel_size,
         )
 
         if self.bias is not None:
@@ -107,32 +101,18 @@ class Linear2D(nn.Module):
                 bias = add_bias_2d(
                     None,
                     self.bias,
-                    self.hidden_size_per_partition,
-                    self.row_rank,
-                    self.col_rank,
                     pm.PARALLEL_2D_ROW,
                     pm.PARALLEL_2D_COL,
                     True,
-                    self.data_parallel_rank,
-                    self.pipeline_parallel_rank,
-                    self.pipeline_parallel_size,
-                    self.tensor_parallel_size,
                 )
                 return output, bias
             else:
                 output = add_bias_2d(
                     output,
                     self.bias,
-                    self.hidden_size_per_partition,
-                    self.row_rank,
-                    self.col_rank,
                     pm.PARALLEL_2D_ROW,
                     pm.PARALLEL_2D_COL,
                     False,
-                    self.data_parallel_rank,
-                    self.pipeline_parallel_rank,
-                    self.pipeline_parallel_size,
-                    self.tensor_parallel_size,
                 )
                 return output
         else:
@@ -185,30 +165,16 @@ class LayerNorm2D(nn.Module):
         bias = add_bias_2d(
             None,
             self.bias,
-            self.partitioned_partition,
-            self.row_rank,
-            self.col_rank,
             pm.PARALLEL_2D_ROW,
             pm.PARALLEL_2D_COL,
             True,
-            self.data_parallel_rank,
-            self.pipeline_parallel_rank,
-            self.pipeline_parallel_size,
-            self.tensor_parallel_size,
         )
         scale = add_bias_2d(
             None,
             self.weight,
-            self.partitioned_partition,
-            self.row_rank,
-            self.col_rank,
             pm.PARALLEL_2D_ROW,
             pm.PARALLEL_2D_COL,
             True,
-            self.data_parallel_rank,
-            self.pipeline_parallel_rank,
-            self.pipeline_parallel_size,
-            self.tensor_parallel_size,
         )
         output = torch.addcmul(bias, scale, output)
         return output
@@ -486,14 +452,8 @@ class Classifier2D(nn.Module):
             self.bias,
             self.summa_dim,
             out_shape,
-            self.row_rank,
-            self.col_rank,
             pm.PARALLEL_2D_ROW,
             pm.PARALLEL_2D_COL,
-            self.data_parallel_rank,
-            self.pipeline_parallel_rank,
-            self.pipeline_parallel_size,
-            self.tensor_parallel_size,
         )
 
 
@@ -563,34 +523,21 @@ class VocabParallelClassifier2D(nn.Module):
         # output: [m/q, n/q, h/q]
         out_shape = x.shape[:-1] + (self.output_size_per_partition,)
 
-        output = Matmul_ABT_2D.apply(
+        output = summa_ABT(
             x,
             self.weight,
             self.summa_dim,
             out_shape,
-            self.row_rank,
-            self.col_rank,
             pm.PARALLEL_2D_ROW,
             pm.PARALLEL_2D_COL,
-            self.data_parallel_rank,
-            self.pipeline_parallel_rank,
-            self.pipeline_parallel_size,
-            self.tensor_parallel_size,
         )
 
         if self.bias is not None:
             output = add_bias_2d(
                 output,
                 self.bias,
-                self.output_size_per_partition,
-                self.row_rank,
-                self.col_rank,
                 pm.PARALLEL_2D_ROW,
                 pm.PARALLEL_2D_COL,
                 False,
-                self.data_parallel_rank,
-                self.pipeline_parallel_rank,
-                self.pipeline_parallel_size,
-                self.tensor_parallel_size,
             )
         return output
