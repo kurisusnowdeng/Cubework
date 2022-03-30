@@ -9,7 +9,7 @@ from cubework.utils import get_current_device, get_dataloader
 from datasets import load_from_disk, set_progress_bar_enabled
 from torch import dtype, nn
 from transformers import GPT2Tokenizer
-from transformers.optimization import get_cosine_schedule_with_warmup
+from transformers.optimization import get_linear_schedule_with_warmup
 
 
 class GPT2Embedding(nn.Module):
@@ -385,7 +385,7 @@ def build_optimizer(args, params):
 def build_scheduler(args, n_steps, optimizer):
     max_steps = n_steps * args.num_epochs
     warmup_steps = n_steps * args.warmup_epochs
-    lr_scheduler = get_cosine_schedule_with_warmup(
+    lr_scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=warmup_steps, num_training_steps=max_steps
     )
     return lr_scheduler
