@@ -5,7 +5,7 @@ from typing import Callable
 
 import cubework.module as cube_nn
 import torch
-from cubework.utils import get_current_device, get_dataloader
+from cubework.utils import get_current_device, get_dataloader, get_logger
 from datasets import load_from_disk, set_progress_bar_enabled
 from torch import dtype, nn
 from transformers import GPT2Tokenizer
@@ -326,7 +326,7 @@ def gpt2_medium(dtype=None, checkpoint=False):
         hidden_size=1024,
         intermediate_size=4096,
         depth=24,
-        num_heads=8,
+        num_heads=16,
         checkpoint=checkpoint,
         dtype=dtype,
     )
@@ -335,13 +335,14 @@ def gpt2_medium(dtype=None, checkpoint=False):
 
 def build_model(args):
     dtype = torch.half if args.use_mixed_precision else None
-    model_func = locals(args.model_name)
+    model_func = globals()[args.model_name]
     return model_func(dtype=dtype, checkpoint=args.use_activation_checkpoint)
 
 
-def _tokenize(example, tokenizer):
+def _tokenize(examples, tokenizer):
     tokenizer.pad_token = tokenizer.unk_token
-    result = tokenizer(example, padding=True, truncation=True, max_length=1024, return_tensors="pt")
+    examples = list(map(lambda x: x["text"], examples))
+    result = tokenizer(examples, padding="max_length", truncation=True, max_length=1024, return_tensors="pt")
     result["labels"] = copy.deepcopy(result["input_ids"])
     return result
 
@@ -392,13 +393,22 @@ def build_scheduler(args, n_steps, optimizer):
 
 
 def build_gpt2(args):
+    logger = get_logger()
+
     model = build_model(args)
+    logger.info("Model is built.")
+
     train_data, test_data = build_data(args)
+    logger.info("Train and test data are built.")
+
     criterion, metric = build_criterion(args)
+    logger.info("Loss and metric function are built.")
+
     optimizer = build_optimizer(args, model.parameters())
     n_steps = len(train_data)
     if args.steps_per_epoch is not None and args.steps_per_epoch < n_steps:
         n_steps = args.steps_per_epoch
     lr_scheduler = build_scheduler(args, n_steps, optimizer)
+    logger.info("Optimizer and learning rate scheduler are built.")
 
     return model, train_data, test_data, criterion, metric, optimizer, lr_scheduler

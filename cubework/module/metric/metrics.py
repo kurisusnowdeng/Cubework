@@ -7,15 +7,15 @@ from cubework.distributed import all_reduce
 from cubework.utils import get_current_device
 
 from ..utils import get_tensor_parallel_mode
-from .metric_2d import calc_acc_2d
-from .metric_3d import calc_acc_3d
-from .metric_std import calc_acc
+from .metric_2d import Accuracy2D
+from .metric_3d import Accuracy3D
+from .metric_std import AccuracySTD
 
 _parallel_accuracy = {
-    None: calc_acc,
-    "1d": calc_acc,
-    "2d": calc_acc_2d,
-    "3d": calc_acc_3d,
+    None: AccuracySTD,
+    "1d": AccuracySTD,
+    "2d": Accuracy2D,
+    "3d": Accuracy3D,
 }
 
 
@@ -41,7 +41,7 @@ class Accuracy(Metric):
     def __init__(self):
         super().__init__("Accuracy")
         tensor_parallel = get_tensor_parallel_mode()
-        self.acc = _parallel_accuracy[tensor_parallel]
+        self.acc = _parallel_accuracy[tensor_parallel]()
         self.reset()
 
     def reset(self):

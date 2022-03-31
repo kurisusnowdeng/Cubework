@@ -52,3 +52,8 @@ def initialize_distributed(parser=None):
     assert env.mode in ALLOWED_MODES
     if args.tensor_parallel is not None:
         cube_dist.init_tensor_parallel(args.tensor_parallel_size, seed)
+
+    if env.mode is None:
+        logger.info("Using data parallelism")
+    else:
+        logger.info(f"Using {env.mode.upper()} tensor parallelism")

@@ -6,7 +6,7 @@ import cubework.module as cube_nn
 import numpy as np
 import torch
 import torchvision
-from cubework.utils import get_dataloader
+from cubework.utils import get_dataloader, get_logger
 from torch import dtype, nn
 from torchvision import transforms
 from transformers.optimization import get_cosine_schedule_with_warmup
@@ -256,7 +256,7 @@ class VisionTransformer(nn.Module):
             img_size=img_size,
             patch_size=patch_size,
             in_chans=in_chans,
-            embedding_dim=hidden_size,
+            embedding_size=hidden_size,
             dropout=dropout,
             dtype=dtype,
         )
@@ -281,7 +281,7 @@ class VisionTransformer(nn.Module):
         self.norm = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon, dtype=dtype)
 
         self.head = ViTHead(
-            dim=hidden_size,
+            hidden_size=hidden_size,
             num_classes=num_classes,
             representation_size=representation_size,
             dtype=dtype,
@@ -299,14 +299,18 @@ class VisionTransformer(nn.Module):
         return x
 
 
-class MixupLoss(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.loss_fn = cube_nn.CrossEntropyLoss(label_smoothing=0.1)
-
-    def forward(self, inputs, targets):
-        y_a, y_b, lam = targets["y_a"], targets["y_b"], targets["lam"]
-        return lam * self.loss_fn(inputs, y_a) + (1 - lam) * self.loss_fn(inputs, y_b)
+def vit_small(dtype=None, checkpoint=False):
+    model_kwargs = dict(
+        img_size=224,
+        patch_size=16,
+        hidden_size=384,
+        num_heads=12,
+        intermediate_size=1536,
+        depth=12,
+        checkpoint=checkpoint,
+        dtype=dtype,
+    )
+    return VisionTransformer(**model_kwargs)
 
 
 def vit_base(dtype=None, checkpoint=False):
@@ -323,8 +327,11 @@ def vit_base(dtype=None, checkpoint=False):
     return VisionTransformer(**model_kwargs)
 
 
-def _mixup_data(batch, alpha=0.0, train=True):
-    x, y = batch
+def _mixup_data(features, alpha=0.0, train=True):
+    x, y = tuple(zip(*features))
+    x = torch.stack(x)
+    y = torch.stack(tuple(map(lambda x: torch.tensor(x), y)))
+
     if train:
         if alpha > 0:
             lam = np.random.beta(alpha, alpha)
@@ -336,7 +343,8 @@ def _mixup_data(batch, alpha=0.0, train=True):
 
         mixed_x = lam * x + (1 - lam) * x[index, :]
         y_a, y_b = y, y[index]
-        lam = torch.tensor([lam]).to(mixed_x.dtype)
+        lam = torch.tensor(lam).to(mixed_x.dtype)
+
         return {
             "pixel_values": mixed_x,
             "labels": {
@@ -345,20 +353,44 @@ def _mixup_data(batch, alpha=0.0, train=True):
                 "lam": lam,
             },
         }
+
     else:
-        return {"pixel_values": x, "labels": y}
+        return {
+            "pixel_values": x,
+            "labels": {
+                "y_a": y,
+                "y_b": y,
+                "lam": torch.ones(()).to(x.dtype),
+            },
+        }
+
+
+class MixupLoss(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.loss_fn = cube_nn.CrossEntropyLoss(label_smoothing=0.1)
+
+    def forward(self, inputs, targets):
+        y_a, y_b, lam = targets["y_a"], targets["y_b"], targets["lam"]
+        return lam * self.loss_fn(inputs, y_a) + (1 - lam) * self.loss_fn(inputs, y_b)
+
+
+class MixupAccuracy(cube_nn.Accuracy):
+    def forward(self, logits, targets, loss):
+        targets = targets["y_a"]
+        return super().forward(logits, targets, loss)
 
 
 def build_model(args):
     dtype = torch.half if args.use_mixed_precision else None
-    model_func = locals(args.model_name)
+    model_func = globals()[args.model_name]
     return model_func(dtype=dtype, checkpoint=args.use_activation_checkpoint)
 
 
 def build_data(args):
     transform_train = transforms.Compose(
         [
-            transforms.RandomCrop(224, padding=4),
+            transforms.RandomResizedCrop(224),
             transforms.AutoAugment(policy=transforms.AutoAugmentPolicy.IMAGENET),
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
@@ -366,7 +398,8 @@ def build_data(args):
     )
     transform_test = transforms.Compose(
         [
-            transforms.Resize(224),
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ]
@@ -396,7 +429,7 @@ def build_data(args):
 
 
 def build_criterion(args):
-    return MixupLoss(), cube_nn.Accuracy()
+    return MixupLoss(), MixupAccuracy()
 
 
 def build_optimizer(args, params):
@@ -414,13 +447,22 @@ def build_scheduler(args, n_steps, optimizer):
 
 
 def build_vit(args):
+    logger = get_logger()
+
     model = build_model(args)
+    logger.info("Model is built.")
+
     train_data, test_data = build_data(args)
+    logger.info("Train and test data are built.")
+
     criterion, metric = build_criterion(args)
+    logger.info("Loss and metric function are built.")
+
     optimizer = build_optimizer(args, model.parameters())
     n_steps = len(train_data)
     if args.steps_per_epoch is not None and args.steps_per_epoch < n_steps:
         n_steps = args.steps_per_epoch
     lr_scheduler = build_scheduler(args, n_steps, optimizer)
+    logger.info("Optimizer and learning rate scheduler are built.")
 
     return model, train_data, test_data, criterion, metric, optimizer, lr_scheduler

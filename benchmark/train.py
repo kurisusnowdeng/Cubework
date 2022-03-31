@@ -3,7 +3,6 @@ import time
 
 import cubework
 import torch
-from cubework.arguments import get_args
 from cubework.distributed import ParallelManager as pm
 from cubework.distributed.collective import all_reduce
 from cubework.utils import (
@@ -26,8 +25,6 @@ _builder = {
     "vit": build_vit,
 }
 
-
-logger = None
 mem_tracker = None
 comm_profiler = None
 
@@ -67,6 +64,8 @@ def _move_to_cuda(x):
 
 
 def _train(epoch, args):
+    logger = get_logger()
+
     model.train()
 
     num_steps = len(train_data)
@@ -191,6 +190,8 @@ def _train(epoch, args):
 
 
 def _test(epoch, args):
+    logger = get_logger()
+
     model.eval()
 
     num_steps = len(test_data)
@@ -261,7 +262,7 @@ def _test(epoch, args):
                     throughput=batch_size * pm.DATA.world_size / (batch_time + 1e-12),
                     tflops=batch_tflops,
                 )
-                metrics[metric.name.lower()] = eval_res
+                metrics[metric.name.lower()] = eval_res.item()
                 progress.set_postfix(**metrics)
 
     if mem_tracker is not None:
@@ -304,7 +305,10 @@ def get_parser():
     parser.add_argument("--warmup_epochs", "--n_warm", type=int, default=0)
     parser.add_argument("--steps_per_epoch", "--n_step", type=int)
     parser.add_argument("--learning_rate", "--lr", type=float)
-    parser.add_argument("--weight_decay", "--decay", type=float)
+    parser.add_argument("--weight_decay", "--decay", type=float, default=0.01)
+
+    parser.add_argument("--do_validation", "--eval", action="store_true", default=False)
+    parser.add_argument("--validation_interval", "--n_eval", type=int, default=1)
 
     parser.add_argument("--use_activation_checkpoint", "--ckpt", action="store_true", default=False)
 
@@ -318,8 +322,8 @@ def get_parser():
     parser.add_argument("--fp16_backoff_factor", type=float, default=0.5)
     parser.add_argument("--fp16_growth_interval", type=int, default=1000)
 
-    parser.add_argument("--use_mem_tracker", "--prof_mem", action="store_true", default=False)
-    parser.add_argument("--use_comm_profiler", "--prof_comm", action="store_true", default=False)
+    parser.add_argument("--use_memory_tracker", "--prof_mem", action="store_true", default=False)
+    parser.add_argument("--use_communication_profiler", "--prof_comm", action="store_true", default=False)
 
     parser.add_argument("--log_file", type=str)
     return parser
@@ -328,7 +332,7 @@ def get_parser():
 def train():
     parser = get_parser()
     cubework.initialize_distributed(parser)
-    args = get_args()
+    args = cubework.get_args()
 
     logger = get_logger()
     if args.log_file is not None:
@@ -351,11 +355,11 @@ def train():
         )
 
     global mem_tracker
-    if args.use_mem_monitor:
+    if args.use_memory_tracker:
         mem_tracker = MemoryTracker(args.log_file)
 
     global comm_profiler
-    if args.use_comm_profiler:
+    if args.use_communication_profiler:
         comm_profiler = CommProfiler()
 
     global numel
@@ -364,13 +368,15 @@ def train():
         msg = f"{numel / 1e6:.3f} M"
     else:
         msg = f"{numel / 1e9:.3f} B"
-    logger.info(f"Model is built (parameter size = {msg}).")
+    logger.info(f"Parameter size = {msg}.")
 
     logger.info("Benchmark start.")
 
     for epoch in range(args.num_epochs):
         _train(epoch, args)
-        _test(epoch, args)
+        if args.do_validation:
+            if (epoch + 1) % args.validation_interval == 0 or epoch + 1 == args.num_epochs:
+                _test(epoch, args)
 
     logger.info("Benchmark complete.")
 

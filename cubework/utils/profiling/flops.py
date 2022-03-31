@@ -1,15 +1,26 @@
 import torch
 from cubework.distributed import ParallelManager as pm
 from cubework.distributed import all_reduce
+from cubework.global_vars import NUM_PARTITIONS
 
 from ..common import get_current_device
 
 
 def calc_model_size(model: torch.nn.Module):
-    numel = sum(p.numel() for p in model.parameters())
-    if pm.TENSOR.is_initialized() and pm.TENSOR.world_size > 1:
+    tensor_parallel_size = 0
+    if pm.TENSOR.is_initialized():
+        tensor_parallel_size = pm.TENSOR.world_size
+    numel = 0
+    for p in model.parameters():
+        num_partitions = getattr(p, NUM_PARTITIONS, 0)
+        if tensor_parallel_size > 1 and num_partitions > 1:
+            numel += p.numel() * num_partitions
+        else:
+            numel += p.numel()
+
+    if tensor_parallel_size > 1:
         numel = torch.tensor(numel).to(get_current_device())
-        numel = all_reduce(numel, pm.TENSOR)
+        numel = all_reduce(numel, pm.TENSOR) / tensor_parallel_size
         numel = numel.item()
     return numel
 
@@ -21,4 +32,4 @@ def calc_tflops(numel: int, num_tokens: int, iter_time: float, with_backward=Tru
         multiple += 2
     if checkpoint:
         multiple += 1
-    return (flops / 1e12) / (iter_time + 1e-12)
+    return (flops * multiple / 1e12) / (iter_time + 1e-12)

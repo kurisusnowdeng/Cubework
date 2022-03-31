@@ -153,7 +153,7 @@ class Classifier(CubeModule):
         dtype: dtype = None,
         weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
         bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
-        vocab_parallel_limit=128,
+        vocab_parallel_limit=1024,
     ):
         tensor_parallel = get_tensor_parallel_mode()
         vocab_parallel = tensor_parallel is not None and num_classes > vocab_parallel_limit
@@ -189,7 +189,7 @@ class Embedding(CubeModule):
         padding_idx: int = None,
         dtype: dtype = None,
         weight_initializer: Callable = init.normal_(),
-        vocab_parallel_limit: int = 2048,
+        vocab_parallel_limit: int = 1024,
         *args,
         **kwargs
     ) -> None:
@@ -254,13 +254,12 @@ class PatchEmbedding(CubeModule):
 
 class Dropout(CubeModule):
     def __init__(self, p: float = 0.5, inplace: bool = False) -> None:
-        super().__init__()
-        self.tensor_parallel = get_tensor_parallel_mode()
-        if self.tensor_parallel == "1d":
+        tensor_parallel = get_tensor_parallel_mode()
+        if tensor_parallel == "1d":
             drop = Dropout1D(p, inplace)
         else:
             drop = nn.Dropout(p, inplace)
-        super().__init__(drop)
+        super().__init__(drop, tensor_parallel=tensor_parallel)
 
     def forward(self, *args):
         if self.tensor_parallel in [None, "1d"]:
