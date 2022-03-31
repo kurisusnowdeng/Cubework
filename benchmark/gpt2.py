@@ -65,13 +65,8 @@ class GPT2SelfAttention(nn.Module):
     ) -> None:
         super().__init__()
         self.attention_head_size = hidden_size // num_heads
+        self.max_positions = max_positions
         self.query_key_value = cube_nn.Linear(hidden_size, 3 * hidden_size, dtype=dtype, bias=bias)
-        self.causal_mask = (
-            torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8, device=get_current_device()))
-            .view(1, 1, max_positions, max_positions)
-            .bool()
-        )
-        self.masked_bias = torch.tensor(-1e4, dtype=dtype, device=get_current_device())
         self.softmax = nn.Softmax(dim=-1)
         self.attention_dropout = cube_nn.Dropout(attention_dropout)
         self.dense = cube_nn.Linear(hidden_size, hidden_size, dtype=dtype, bias=True)
@@ -88,7 +83,13 @@ class GPT2SelfAttention(nn.Module):
 
         x = torch.matmul(q, k.transpose(-1, -2))
         x = x / math.sqrt(self.attention_head_size)
-        x = torch.where(self.causal_mask, x, self.masked_bias)
+        # causal mask
+        causal_mask = (
+            torch.tril(torch.ones((self.max_positions, self.max_positions), dtype=torch.uint8, device=x.device))
+            .view(1, 1, self.max_positions, self.max_positions)
+            .bool()
+        )
+        x = torch.where(causal_mask, x, torch.tensor(-1e4, dtype=x.dtype, device=x.device))
         if attention_mask is not None:
             x = x + attention_mask
         x = self.softmax(x)
@@ -309,34 +310,31 @@ class GPT2(nn.Module):
         return x
 
 
-def gpt2_small(dtype=None, checkpoint=False):
+def gpt2_small(checkpoint=False):
     model_kwargs = dict(
         hidden_size=768,
         intermediate_size=3072,
         depth=12,
         num_heads=12,
         checkpoint=checkpoint,
-        dtype=dtype,
     )
     return GPT2(**model_kwargs)
 
 
-def gpt2_medium(dtype=None, checkpoint=False):
+def gpt2_medium(checkpoint=False):
     model_kwargs = dict(
         hidden_size=1024,
         intermediate_size=4096,
         depth=24,
         num_heads=16,
         checkpoint=checkpoint,
-        dtype=dtype,
     )
     return GPT2(**model_kwargs)
 
 
 def build_model(args):
-    dtype = torch.half if args.use_mixed_precision else None
     model_func = globals()[args.model_name]
-    return model_func(dtype=dtype, checkpoint=args.use_activation_checkpoint)
+    return model_func(checkpoint=args.use_activation_checkpoint)
 
 
 def _tokenize(examples, tokenizer):

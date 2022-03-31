@@ -299,7 +299,7 @@ class VisionTransformer(nn.Module):
         return x
 
 
-def vit_small(dtype=None, checkpoint=False):
+def vit_small(checkpoint=False):
     model_kwargs = dict(
         img_size=224,
         patch_size=16,
@@ -308,12 +308,11 @@ def vit_small(dtype=None, checkpoint=False):
         intermediate_size=1536,
         depth=12,
         checkpoint=checkpoint,
-        dtype=dtype,
     )
     return VisionTransformer(**model_kwargs)
 
 
-def vit_base(dtype=None, checkpoint=False):
+def vit_base(checkpoint=False):
     model_kwargs = dict(
         img_size=224,
         patch_size=16,
@@ -322,7 +321,6 @@ def vit_base(dtype=None, checkpoint=False):
         intermediate_size=3072,
         depth=12,
         checkpoint=checkpoint,
-        dtype=dtype,
     )
     return VisionTransformer(**model_kwargs)
 
@@ -382,9 +380,8 @@ class MixupAccuracy(cube_nn.Accuracy):
 
 
 def build_model(args):
-    dtype = torch.half if args.use_mixed_precision else None
     model_func = globals()[args.model_name]
-    return model_func(dtype=dtype, checkpoint=args.use_activation_checkpoint)
+    return model_func(checkpoint=args.use_activation_checkpoint)
 
 
 def build_data(args):

@@ -43,9 +43,14 @@ def clip_grad_norm(
                 tp_norms.append(norm * num_partitions)
             else:
                 std_norms.append(norm)
-        std_norm = torch.sum(torch.stack(std_norms))
-        tp_norm = torch.sum(torch.stack(tp_norms))
-        tp_norm = all_reduce(tp_norm, pm.TENSOR) / pm.TENSOR.world_size
+        std_norm = (
+            torch.sum(torch.stack(std_norms)) if len(std_norms) > 0 else torch.zeros(()).to(torch.float).to(device)
+        )
+        if len(tp_norms) > 0:
+            tp_norm = torch.sum(torch.stack(tp_norms))
+            tp_norm = all_reduce(tp_norm, pm.TENSOR) / pm.TENSOR.world_size
+        else:
+            tp_norm = torch.zeros(()).to(torch.float).to(device)
         total_norm = (std_norm + tp_norm) ** (1.0 / norm_type)
     if error_if_nonfinite and torch.logical_or(total_norm.isnan(), total_norm.isinf()):
         raise RuntimeError(
