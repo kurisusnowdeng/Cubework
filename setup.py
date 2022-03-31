@@ -29,7 +29,7 @@ setup(
     long_description_content_type="text/markdown",
     license="Apache Software License 2.0",
     install_requires=fetch_requirements("requirements.txt"),
-    python_requires=">=3.8",
+    python_requires=">=3.7",
     classifiers=[
         "Programming Language :: Python :: 3",
         "Environment :: GPU :: NVIDIA CUDA",
