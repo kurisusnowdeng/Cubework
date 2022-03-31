@@ -61,6 +61,9 @@ class Accuracy(Metric):
             reduced_values = all_reduce(torch.stack([self.total_correct, self.total_samples]), pm.DATA)
             return reduced_values[0] / reduced_values[1]
 
+    def to_str(self):
+        return f"{self.value().item()*100:.2f} %"
+
 
 class Perplexity(Metric):
     def __init__(self):
@@ -81,3 +84,6 @@ class Perplexity(Metric):
         with torch.no_grad():
             reduced_loss = all_reduce(self.total_loss, pm.DATA) / (self.cnt * pm.DATA.world_size)
             return torch.exp(reduced_loss)
+
+    def to_str(self):
+        return f"{self.value().item():.2f}"

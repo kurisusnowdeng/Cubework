@@ -125,14 +125,16 @@ def _train(epoch, args):
                     scaler.unscale_(optimizer)
                     clip_grad_norm(model.parameters(), args.gradient_clipping)
                 scaler.step(optimizer)
+                scale = scaler.get_scale()
                 scaler.update()
-
+                # skip stepping lr scheduler if overflow
+                if not scale > scaler.get_scale():
+                    lr_scheduler.step()
             else:
                 if args.gradient_clipping > 0:
                     clip_grad_norm(model.parameters(), args.gradient_clipping)
                 optimizer.step()
-
-        lr_scheduler.step()
+                lr_scheduler.step()
 
         bwd_end = time.time()
 
@@ -276,7 +278,7 @@ def _test(epoch, args):
     total_tokens = _data_parallel_sum(total_tokens)
 
     msg = f"[Epoch {epoch} / Train]: Loss = {total_loss.item() / num_steps:.3f}"
-    msg += f" | {metric.name} = {metric.value().item():.5f}"
+    msg += f" | {metric.name} = {metric.to_str()}"
     msg += f" | Throughput = {total_samples.item() / (total_time + 1e-12):.3f} samples/sec"
     tflops = calc_tflops(
         numel, total_tokens.item(), total_time, with_backward=True, checkpoint=args.use_activation_checkpoint
@@ -317,7 +319,7 @@ def get_parser():
     parser.add_argument("--gradient_accumulation", "--ac", type=int, default=1)
 
     parser.add_argument("--use_mixed_precision", "--amp", action="store_true", default=False)
-    parser.add_argument("--fp16_initial_scale", type=float, default=2**15)
+    parser.add_argument("--fp16_initial_scale", type=float, default=2**8)
     parser.add_argument("--fp16_growth_factor", type=float, default=2.0)
     parser.add_argument("--fp16_backoff_factor", type=float, default=0.5)
     parser.add_argument("--fp16_growth_interval", type=int, default=1000)
