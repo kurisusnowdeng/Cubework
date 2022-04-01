@@ -366,7 +366,7 @@ def _mixup_data(features, alpha=0.0, train=True):
 class MixupLoss(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.loss_fn = cube_nn.CrossEntropyLoss(label_smoothing=0.1)
+        self.loss_fn = cube_nn.CrossEntropyLoss()
 
     def forward(self, inputs, targets):
         y_a, y_b, lam = targets["y_a"], targets["y_b"], targets["lam"]

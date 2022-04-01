@@ -15,6 +15,7 @@ from cubework.utils import (
     get_logger,
     write_logger_to_file,
 )
+from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
 from gpt2 import build_gpt2
@@ -279,7 +280,7 @@ def _test(epoch, args):
     total_samples = _data_parallel_sum(total_samples)
     total_tokens = _data_parallel_sum(total_tokens)
 
-    msg = f"[Epoch {epoch} / Train]: Loss = {total_loss.item() / total_steps:.3f}"
+    msg = f"[Epoch {epoch} / Test]: Loss = {total_loss.item() / total_steps:.3f}"
     msg += f" | {metric.name} = {metric.to_str()}"
     msg += f" | Step time = {total_time / total_steps:.3f} s"
     msg += f" | Throughput = {total_samples.item() / (total_time + 1e-12):.3f} samples/sec"
@@ -291,7 +292,7 @@ def _test(epoch, args):
         msg += f" | Peak memory = {peak_mem / 1024:.3f} GB"
     if comm_profiler is not None:
         msg += (
-            f"\n[Epoch {epoch} / Train]: Communication total time = {comm_time:.3f} s, "
+            f"\n[Epoch {epoch} / Test]: Communication total time = {comm_time:.3f} s, "
             + f"step time = {comm_time / total_steps:.3f} s,"
             + f"ratio = {comm_time * 100 / (total_time + 1e-12):.3f} %, "
             + f"avg bandwidth = {comm_vol / (comm_time * 1024**3 + 1e-12):.3f} GB/s"
@@ -349,6 +350,8 @@ def train():
 
     global model, train_data, test_data, criterion, metric, optimizer, lr_scheduler
     model, train_data, test_data, criterion, metric, optimizer, lr_scheduler = _builder[model_type](args)
+
+    model = DDP(model, process_group=pm.DATA.group, device_ids=[get_current_device()])
 
     global scaler
     if args.use_mixed_precision:
