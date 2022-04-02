@@ -11,18 +11,20 @@ def calc_model_size(model: torch.nn.Module):
     if pm.TENSOR.is_initialized():
         tensor_parallel_size = pm.TENSOR.world_size
     numel = 0
+    numel_per_device = 0
     for p in model.parameters():
         num_partitions = getattr(p, NUM_PARTITIONS, 0)
         if tensor_parallel_size > 1 and num_partitions > 1:
             numel += p.numel() * num_partitions
         else:
             numel += p.numel()
+        numel_per_device += p.numel()
 
     if tensor_parallel_size > 1:
         numel = torch.tensor(numel).to(get_current_device())
         numel = all_reduce(numel, pm.TENSOR) / tensor_parallel_size
         numel = numel.item()
-    return numel
+    return numel, numel_per_device
 
 
 def calc_tflops(numel: int, num_tokens: int, iter_time: float, with_backward=True, checkpoint=False) -> float:

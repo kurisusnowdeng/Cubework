@@ -86,4 +86,4 @@ class Perplexity(Metric):
             return torch.exp(reduced_loss)
 
     def to_str(self):
-        return f"{self.value().item():.2f}"
+        return f"{self.value().item():.5g}"

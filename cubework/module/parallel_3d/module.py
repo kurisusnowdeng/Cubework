@@ -254,7 +254,7 @@ class VocabParallelClassifier3D(nn.Module):
 
     def _set_tensor_parallel_attributes(self) -> None:
         if self.has_weight:
-            set_tensor_parallel_attribute_by_partition(self.weight, self.depth**2)
+            set_tensor_parallel_attribute_by_partition(self.weight, self.depth**3)
         if self.bias is not None:
             set_tensor_parallel_attribute_by_partition(self.bias, self.depth)
 
@@ -473,7 +473,7 @@ class VocabParallelEmbedding3D(torch.nn.Module):
         env.vocab_parallel = True
 
     def _set_tensor_parallel_attributes(self):
-        set_tensor_parallel_attribute_by_partition(self.weight, self.depth**2)
+        set_tensor_parallel_attribute_by_partition(self.weight, self.depth**3)
 
     def reset_parameters(self, weight_initializer) -> None:
         with seed(pm.TENSOR):

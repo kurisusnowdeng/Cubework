@@ -161,7 +161,7 @@ def _train(epoch, args):
                 lr=lr_scheduler.get_last_lr()[0],
                 time_forward=fwd_time,
                 time_backward=bwd_time,
-                throughput=batch_size * pm.DATA.world_size / (batch_time + 1e-12),
+                throughput=batch_size * pm.DATA.world_size / batch_time,
                 tflops=batch_tflops,
             )
 
@@ -169,7 +169,7 @@ def _train(epoch, args):
         peak_mem = mem_tracker.stop()
 
     if comm_profiler is not None:
-        _, comm_vol, comm_time = comm_profiler.stop()
+        comm_cnt, comm_vol, comm_time = comm_profiler.stop()
 
     total_loss = _data_parallel_mean(total_loss)
     total_samples = _data_parallel_sum(total_samples)
@@ -177,7 +177,7 @@ def _train(epoch, args):
 
     msg = f"[Epoch {epoch} / Train]: Loss = {total_loss.item() / total_steps:.3f}"
     msg += f" | Step time = {total_time / total_steps:.3f} s"
-    msg += f" | Throughput = {total_samples.item() / (total_time + 1e-12):.3f} samples/sec"
+    msg += f" | Throughput = {total_samples.item() / total_time:.3f} samples/sec"
     tflops = calc_tflops(
         numel, total_tokens.item(), total_time, with_backward=True, checkpoint=args.use_activation_checkpoint
     )
@@ -185,12 +185,13 @@ def _train(epoch, args):
     if mem_tracker is not None:
         msg += f" | Peak memory = {peak_mem / 1024:.3f} GB"
     if comm_profiler is not None:
-        msg += (
-            f"\n[Epoch {epoch} / Train]: Communication time = {comm_time:.3f} s, "
-            + f"step time = {comm_time / total_steps:.3f} s,"
-            + f"ratio = {comm_time * 100 / (total_time + 1e-12):.3f} %, "
-            + f"avg bandwidth = {comm_vol / (comm_time * 1024**2 + 1e-12):.3f} GB/s"
-        )
+        msg += f"\n[Epoch {epoch} / Train]: Communication total time = {comm_time:.3f} s, # ops = {comm_cnt:.5g}"
+        if comm_time > 0:
+            msg += (
+                f", avg step time = {comm_time / total_steps:.3f} s"
+                + f", ratio = {comm_time * 100 / total_time:.3f} %"
+                + f", avg bandwidth = {comm_vol / (comm_time * 1024**3):.3f} GB/s"
+            )
     logger.info(msg)
 
 
@@ -264,7 +265,7 @@ def _test(epoch, args):
                 metrics = dict(
                     loss=loss.item(),
                     step_time=batch_time,
-                    throughput=batch_size * pm.DATA.world_size / (batch_time + 1e-12),
+                    throughput=batch_size * pm.DATA.world_size / batch_time,
                     tflops=batch_tflops,
                 )
                 metrics[metric.name.lower()] = eval_res.item()
@@ -283,20 +284,24 @@ def _test(epoch, args):
     msg = f"[Epoch {epoch} / Test]: Loss = {total_loss.item() / total_steps:.3f}"
     msg += f" | {metric.name} = {metric.to_str()}"
     msg += f" | Step time = {total_time / total_steps:.3f} s"
-    msg += f" | Throughput = {total_samples.item() / (total_time + 1e-12):.3f} samples/sec"
+    msg += f" | Throughput = {total_samples.item() / total_time:.3f} samples/sec"
     tflops = calc_tflops(
         numel, total_tokens.item(), total_time, with_backward=True, checkpoint=args.use_activation_checkpoint
     )
     msg += f" | TFLOPS = {tflops:.3f}"
+
     if mem_tracker is not None:
         msg += f" | Peak memory = {peak_mem / 1024:.3f} GB"
+
     if comm_profiler is not None:
-        msg += (
-            f"\n[Epoch {epoch} / Test]: Communication total time = {comm_time:.3f} s, "
-            + f"step time = {comm_time / total_steps:.3f} s,"
-            + f"ratio = {comm_time * 100 / (total_time + 1e-12):.3f} %, "
-            + f"avg bandwidth = {comm_vol / (comm_time * 1024**3 + 1e-12):.3f} GB/s"
-        )
+        msg += f"\n[Epoch {epoch} / Test]: Communication total time = {comm_time:.3f} s"
+        if comm_time > 0:
+            msg += (
+                f", avg step time = {comm_time / total_steps:.3f} s"
+                + f", ratio = {comm_time * 100 / total_time:.3f} %"
+                + f", avg bandwidth = {comm_vol / (comm_time * 1024**3):.3f} GB/s"
+            )
+
     logger.info(msg)
 
 
@@ -372,12 +377,13 @@ def train():
         comm_profiler = CommProfiler()
 
     global numel
-    numel = calc_model_size(model)
+    numel, _ = calc_model_size(model)
     if numel < 1e9:
         msg = f"{numel / 1e6:.3f} M"
     else:
         msg = f"{numel / 1e9:.3f} B"
-    logger.info(f"Parameter size = {msg}.")
+    model_mem = torch.cuda.max_memory_allocated(get_current_device()) / 1024**3
+    logger.info(f"Parameter size = {msg} | Model memory = {model_mem:.3f} GB.")
 
     logger.info("Benchmark start.")
 

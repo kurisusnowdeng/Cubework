@@ -214,7 +214,7 @@ class GPT2Block(nn.Module):
         if self.checkpoint:
             return torch.utils.checkpoint.checkpoint(self._forward, x, attention_mask)
         else:
-            return self._forward(x)
+            return self._forward(x, attention_mask)
 
 
 class GPT2LMLoss(nn.Module):
@@ -315,7 +315,7 @@ def gpt2_small(checkpoint=False):
         hidden_size=768,
         intermediate_size=3072,
         depth=12,
-        num_heads=12,
+        num_heads=16,
         checkpoint=checkpoint,
     )
     return GPT2(**model_kwargs)
@@ -327,6 +327,61 @@ def gpt2_medium(checkpoint=False):
         intermediate_size=4096,
         depth=24,
         num_heads=16,
+        checkpoint=checkpoint,
+    )
+    return GPT2(**model_kwargs)
+
+
+def gpt2_large(checkpoint=True):
+    model_kwargs = dict(
+        hidden_size=1280,
+        intermediate_size=5120,
+        depth=36,
+        num_heads=64,
+        checkpoint=checkpoint,
+    )
+    return GPT2(**model_kwargs)
+
+
+def gpt2_xl(checkpoint=True):
+    model_kwargs = dict(
+        hidden_size=1600,
+        intermediate_size=6400,
+        depth=48,
+        num_heads=64,
+        checkpoint=checkpoint,
+    )
+    return GPT2(**model_kwargs)
+
+
+def gpt2_3b(checkpoint=True):
+    model_kwargs = dict(
+        hidden_size=1920,
+        intermediate_size=7680,
+        depth=64,
+        num_heads=64,
+        checkpoint=checkpoint,
+    )
+    return GPT2(**model_kwargs)
+
+
+def gpt2_6b(checkpoint=True):
+    model_kwargs = dict(
+        hidden_size=2560,
+        intermediate_size=10240,
+        depth=72,
+        num_heads=64,
+        checkpoint=checkpoint,
+    )
+    return GPT2(**model_kwargs)
+
+
+def gpt2_12b(checkpoint=True):
+    model_kwargs = dict(
+        hidden_size=3200,
+        intermediate_size=12800,
+        depth=96,
+        num_heads=64,
         checkpoint=checkpoint,
     )
     return GPT2(**model_kwargs)
