@@ -41,8 +41,8 @@ class _SUMMA_AB(torch.autograd.Function):
         C = torch.zeros(C_shape, dtype=A.dtype, device=get_current_device())
 
         for i in range(summa_dim):
-            A_temp = broadcast(A.clone(), row_parallel_mode.rank_by_idx(i), row_parallel_mode)
-            B_temp = broadcast(B.clone(), col_parallel_mode.rank_by_idx(i), col_parallel_mode)
+            A_temp = broadcast(A.clone().detach(), row_parallel_mode.rank_by_idx(i), row_parallel_mode)
+            B_temp = broadcast(B.clone().detach(), col_parallel_mode.rank_by_idx(i), col_parallel_mode)
 
             C = torch.addmm(C, A_temp, B_temp)
 

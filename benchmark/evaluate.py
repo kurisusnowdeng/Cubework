@@ -2,6 +2,8 @@ from train import get_parser
 import cubework
 from cubework.utils import get_logger
 from vit import build_data
+from cubework.utils import CommProfiler
+import torch.distributed as dist
 
 parser = get_parser()
 cubework.initialize_distributed(parser)

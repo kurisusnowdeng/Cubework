@@ -17,7 +17,7 @@ def _add_file_handler(file, logger):
 
     file_handler = logging.FileHandler(file, mode="a")
     file_handler.setLevel(logging.INFO)
-    formatter = logging.Formatter("[%(asctime)s] %(levelname)s > %(message)s")
+    formatter = logging.Formatter("%(asctime)s %(levelname)s > %(message)s", datefmt="[%Y/%m/%d %H:%M:%S.%f]")
     file_handler.setFormatter(formatter)
 
     logger.addHandler(file_handler)
@@ -35,7 +35,11 @@ def init_logger():
         level = logging.ERROR
 
     _default_logger.setLevel(level)
-    _default_logger.addHandler(RichHandler())
+
+    handler = RichHandler()
+    formatter = logging.Formatter("%(message)s", datefmt="[%Y/%m/%d %H:%M:%S.%f]")
+    handler.setFormatter(formatter)
+    _default_logger.addHandler(handler)
 
 
 def write_logger_to_file(file, logger=None):

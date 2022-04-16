@@ -165,6 +165,8 @@ def _train(epoch, args):
                 tflops=batch_tflops,
             )
 
+    torch.cuda.synchronize()
+
     if mem_tracker is not None:
         peak_mem = mem_tracker.stop()
 
@@ -271,6 +273,8 @@ def _test(epoch, args):
                 metrics[metric.name.lower()] = eval_res.item()
                 progress.set_postfix(**metrics)
 
+    torch.cuda.synchronize()
+
     if mem_tracker is not None:
         peak_mem = mem_tracker.stop()
 
@@ -356,7 +360,7 @@ def train():
     global model, train_data, test_data, criterion, metric, optimizer, lr_scheduler
     model, train_data, test_data, criterion, metric, optimizer, lr_scheduler = _builder[model_type](args)
 
-    model = DDP(model, process_group=pm.DATA.group, device_ids=[get_current_device()])
+    model = DDP(model, process_group=pm.DATA.group)
 
     global scaler
     if args.use_mixed_precision:
@@ -394,6 +398,7 @@ def train():
                 _test(epoch, args)
 
     logger.info("Benchmark complete.")
+    cubework.destroy_distributed()
 
 
 if __name__ == "__main__":

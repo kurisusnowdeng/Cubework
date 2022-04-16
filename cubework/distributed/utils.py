@@ -89,6 +89,9 @@ class ParallelMode(object):
             self._rng_state = torch.get_rng_state()
             self._cuda_rng_state = torch.cuda.get_rng_state()
 
+    def destroy(self):
+        dist.destroy_process_group(self._group)
+
 
 class ParallelManager(object):
     DATA = ParallelMode(DATA)
@@ -315,3 +318,12 @@ def init_tensor_parallel(tensor_parallel_size, seed):
     )
 
     _TENSOR_PARALLEL_INIT_FUNCS[env.mode](tensor_parallel_size, tensor_parallel_seed)
+
+
+def destroy_distributed():
+    for name, mode in vars(ParallelManager).items():
+        if isinstance(mode, ParallelMode) and name != "GLOBAL":
+            if mode.is_initialized():
+                mode.destroy()
+    if dist.is_initialized():
+        dist.destroy_process_group()
