@@ -1,7 +1,7 @@
-import time
 from functools import partial
 from typing import List
 
+import torch
 import torch.distributed as dist
 from torch import Tensor
 from torch.distributed import ReduceOp
@@ -14,7 +14,9 @@ torch_reduce = dist.reduce
 
 
 class CommProfiler(object):
-    def __init__(self) -> None:
+    def __init__(self):
+        self.start_event = torch.cuda.Event(enable_timing=True)
+        self.end_event = torch.cuda.Event(enable_timing=True)
         self.reset()
 
     def start(self):
@@ -31,27 +33,32 @@ class CommProfiler(object):
         dist.broadcast = torch_broadcast
         dist.reduce = torch_reduce
 
-        return self.total_count, self.total_volume, self.total_time
+        return self.total_count, self.total_volume, self.total_time / 1000
 
     def new(self, vol):
         self.running_ops += 1
         self.total_count += 1
         self.total_volume += vol
-        if self.start_time is None:
-            self.start_time = time.time()
+        if not self.is_profiling:
+            self.is_profiling = True
+            self.start_event.record()
 
     def finish(self):
         self.running_ops -= 1
         if self.running_ops == 0:
-            self.total_time += time.time() - self.start_time
-            self.start_time = None
+            self.end_event.record()
+            self.start_event.synchronize()
+            self.end_event.synchronize()
+            self.total_time += self.start_event.elapsed_time(self.end_event)
+            self.is_profiling = False
 
     def reset(self):
+        assert self.start_event.query() and self.end_event.query(), "Existing profiling events are not completed yet."
         self.running_ops = 0
         self.total_time = 0.0
         self.total_volume = 0.0
         self.total_count = 0
-        self.start_time = None
+        self.is_profiling = False
 
 
 class CommHandler(object):
