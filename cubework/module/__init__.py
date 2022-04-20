@@ -14,3 +14,4 @@ from .init import (
 from .loss import CrossEntropyLoss
 from .metric import Accuracy, Perplexity
 from .modules import Classifier, Dropout, Embedding, LayerNorm, Linear, PatchEmbedding, partition_batch
+from .utils import synchronize

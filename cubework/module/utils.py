@@ -1,4 +1,5 @@
 import collections.abc
+from collections import deque
 from itertools import repeat
 
 import torch
@@ -30,3 +31,13 @@ def split_tensor(tensor, dim, parallel_mode):
         return tensor
     output = torch.chunk(tensor, parallel_mode.world_size, dim=dim)[parallel_mode.local_rank].contiguous()
     return output
+
+
+async_comm_bucket = deque()
+
+
+def synchronize():
+    while len(async_comm_bucket) > 0:
+        op = async_comm_bucket.pop()
+        if op is not None:
+            op.wait()
