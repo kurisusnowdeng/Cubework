@@ -337,7 +337,7 @@ def gpt2_large(checkpoint=True):
         hidden_size=1280,
         intermediate_size=5120,
         depth=36,
-        num_heads=64,
+        num_heads=20,
         checkpoint=checkpoint,
     )
     return GPT2(**model_kwargs)
@@ -413,14 +413,14 @@ def build_data(args):
         batch_size=args.batch_size,
         drop_last=True,
         collate_fn=partial(_tokenize, tokenizer=tokenizer),
-        num_workers=4,
+        num_workers=1,
         pin_memory=True,
     )
     test_data = get_dataloader(
         dataset=dataset["validation"],
         batch_size=args.batch_size,
         collate_fn=partial(_tokenize, tokenizer=tokenizer),
-        num_workers=4,
+        num_workers=1,
         pin_memory=True,
     )
 

@@ -34,4 +34,4 @@ def calc_tflops(numel: int, num_tokens: int, iter_time: float, with_backward=Tru
         multiple += 2
     if checkpoint:
         multiple += 1
-    return (flops * multiple / 1e12) / (iter_time + 1e-12)
+    return (flops * multiple / (1e12 * pm.GLOBAL.world_size)) / (iter_time + 1e-12)

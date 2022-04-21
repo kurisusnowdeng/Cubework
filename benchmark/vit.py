@@ -325,6 +325,58 @@ def vit_base(checkpoint=False):
     return VisionTransformer(**model_kwargs)
 
 
+def vit_g(checkpoint=True):
+    model_kwargs = dict(
+        img_size=224,
+        patch_size=14,
+        hidden_size=1664,
+        num_heads=64,
+        intermediate_size=8192,
+        depth=48,
+        checkpoint=checkpoint,
+    )
+    return VisionTransformer(**model_kwargs)
+
+
+def vit_3b(checkpoint=True):
+    model_kwargs = dict(
+        img_size=224,
+        patch_size=14,
+        hidden_size=1920,
+        num_heads=64,
+        intermediate_size=7680,
+        depth=64,
+        checkpoint=checkpoint,
+    )
+    return VisionTransformer(**model_kwargs)
+
+
+def vit_6b(checkpoint=True):
+    model_kwargs = dict(
+        img_size=224,
+        patch_size=14,
+        hidden_size=2560,
+        num_heads=64,
+        intermediate_size=10240,
+        depth=72,
+        checkpoint=checkpoint,
+    )
+    return VisionTransformer(**model_kwargs)
+
+
+def vit_12b(checkpoint=True):
+    model_kwargs = dict(
+        img_size=224,
+        patch_size=14,
+        hidden_size=3200,
+        num_heads=64,
+        intermediate_size=12800,
+        depth=96,
+        checkpoint=checkpoint,
+    )
+    return VisionTransformer(**model_kwargs)
+
+
 def _mixup_data(features, alpha=0.0, train=True):
     x, y = tuple(zip(*features))
     x = torch.stack(x)
@@ -412,14 +464,14 @@ def build_data(args):
         batch_size=args.batch_size,
         drop_last=True,
         collate_fn=partial(_mixup_data, alpha=0.8, train=True),
-        num_workers=4,
+        num_workers=1,
         pin_memory=True,
     )
     test_data = get_dataloader(
         dataset=test_dataset,
         batch_size=args.batch_size,
         collate_fn=partial(_mixup_data, alpha=0.8, train=False),
-        num_workers=4,
+        num_workers=1,
         pin_memory=True,
     )
     return train_data, test_data

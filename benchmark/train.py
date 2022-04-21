@@ -352,7 +352,7 @@ def train():
 
     logger = get_logger()
     if args.log_file is not None:
-        write_logger_to_file(logger)
+        write_logger_to_file(args.log_file)
 
     model_type = args.model_name.split("_")[0]
     assert model_type in ["gpt2", "vit"], f"No support for {args.model_name}."
