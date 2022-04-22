@@ -408,6 +408,8 @@ class Embedding3D(nn.Module):
         self.input_parallel_mode = get_input_parallel_mode()
         self.weight_parallel_mode = get_weight_parallel_mode()
         self.output_parallel_mode = get_output_parallel_mode()
+        self.input_x_weight_parallel_mode = get_input_x_weight_parallel_mode()
+        self.output_x_weight_parallel_mode = get_output_x_weight_parallel_mode()
 
         self.num_embeddings = num_embeddings
         self.embed_dim = embedding_dim
@@ -426,13 +428,20 @@ class Embedding3D(nn.Module):
     def _set_tensor_parallel_attributes(self) -> None:
         set_tensor_parallel_attribute_by_partition(self.weight, self.depth)
 
+    def _sync_grad_hook(self, grad) -> Tensor:
+        # grad = all_reduce(grad.clone(), self.input_parallel_mode)
+        # grad = all_reduce(grad, self.weight_parallel_mode)
+        grad = all_reduce(grad.clone(), self.input_x_weight_parallel_mode)
+        return grad
+
     def reset_parameters(self, weight_initializer) -> None:
         with seed(pm.TENSOR):
             fan_in, fan_out = self.num_embeddings, self.embed_dim
             weight_initializer(self.weight, fan_in=fan_in, fan_out=fan_out)
             self._fill_padding_idx_with_zero()
-        weight_src_rank = self.weight_parallel_mode.rank_by_idx(0)
-        broadcast(self.weight, weight_src_rank, self.weight_parallel_mode)
+        # weight_src_rank = self.weight_parallel_mode.rank_by_idx(0)
+        broadcast(self.weight, self.input_x_weight_parallel_mode.rank_by_idx(0), self.input_x_weight_parallel_mode)
+        self.weight.register_hook(self._sync_grad_hook)
 
     def _fill_padding_idx_with_zero(self) -> None:
         if self.padding_idx is not None:
@@ -443,10 +452,10 @@ class Embedding3D(nn.Module):
         input_ = split_batch_3d(
             input_, input_parallel_mode=self.input_parallel_mode, weight_parallel_mode=self.weight_parallel_mode
         )
-        weight = broadcast_weight_3d_from_diagonal(
-            self.weight, self.input_parallel_mode, self.weight_parallel_mode, self.output_parallel_mode
-        )
-        output = F.embedding(input_, weight, self.padding_idx, *self.embed_args, **self.embed_kwargs)
+        # weight = broadcast_weight_3d_from_diagonal(
+        #     self.weight, self.input_parallel_mode, self.weight_parallel_mode, self.output_parallel_mode
+        # )
+        output = F.embedding(input_, self.weight, self.padding_idx, *self.embed_args, **self.embed_kwargs)
 
         return output
 

@@ -389,8 +389,8 @@ def train():
         msg = f"{numel / 1e6:.3f} M"
     else:
         msg = f"{numel / 1e9:.3f} B"
-    model_mem = torch.cuda.max_memory_allocated(get_current_device()) / 1024**3
-    logger.info(f"Parameter size = {msg} | Model memory = {model_mem:.3f} GB.")
+    model_mem = torch.cuda.max_memory_allocated(get_current_device())
+    logger.info(f"Parameter size = {msg} | Model memory = {model_mem / 1024**3:.3f} GB.")
 
     logger.info("Benchmark start.")
 
@@ -399,6 +399,9 @@ def train():
         if args.do_validation:
             if (epoch + 1) % args.validation_interval == 0 or epoch + 1 == args.num_epochs:
                 _test(epoch, args)
+
+    state_mem = torch.cuda.memory_allocated(get_current_device()) - model_mem
+    logger.info(f"Gradients & optimizer states memory = {state_mem / 1024**3:.3f} GB.")
 
     logger.info("Benchmark complete.")
     cubework.destroy_distributed()
