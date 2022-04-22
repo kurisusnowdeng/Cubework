@@ -7,6 +7,7 @@ from cubework.distributed.utils import ParallelMode
 from cubework.global_vars import env
 from torch import Tensor
 from torch.cuda.amp import custom_bwd, custom_fwd
+from ..utils import async_comm_bucket
 
 
 def get_depth_from_env() -> int:
@@ -25,8 +26,20 @@ def get_output_parallel_mode() -> ParallelMode:
     return getattr(pm, env.output_group_3d)
 
 
+def get_input_x_weight_parallel_mode() -> ParallelMode:
+    return getattr(pm, env.input_x_weight_group_3d)
+
+
+def get_output_x_weight_parallel_mode() -> ParallelMode:
+    return getattr(pm, env.output_x_weight_group_3d)
+
+
 def swap_in_out_group():
     env.input_group_3d, env.output_group_3d = env.output_group_3d, env.input_group_3d
+    env.input_x_weight_group_3d, env.output_x_weight_group_3d = (
+        env.output_x_weight_group_3d,
+        env.input_x_weight_group_3d,
+    )
 
 
 def split_batch_3d(
@@ -58,22 +71,23 @@ def reduce_tensor_3d(tensor: Tensor, parallel_mode: ParallelMode) -> Tensor:
     return _ReduceTensor3D.apply(tensor, parallel_mode)
 
 
-class _AllGatherTensor3D(torch.autograd.Function):
+class _AllGatherWeight3D(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input_, dim, parallel_mode):
+    def forward(ctx, weight, dim, parallel_mode):
         ctx.dim = dim
         ctx.parallel_mode = parallel_mode
-        output = all_gather(input_, dim, parallel_mode)
+        output = all_gather(weight, dim, parallel_mode)
         return output
 
     @staticmethod
     def backward(ctx, output_grad):
-        input_grad = reduce_scatter(output_grad, ctx.dim, ctx.parallel_mode)
-        return input_grad, None, None
+        grad, op = reduce_scatter(output_grad, ctx.dim, ctx.parallel_mode, async_op=True)
+        async_comm_bucket.append(op)
+        return grad, None, None
 
 
-def all_gather_tensor_3d(tensor: Tensor, dim: int, parallel_mode: ParallelMode) -> Tensor:
-    return _AllGatherTensor3D.apply(tensor, dim, parallel_mode)
+def all_gather_weight_3d(tensor: Tensor, dim: int, parallel_mode: ParallelMode) -> Tensor:
+    return _AllGatherWeight3D.apply(tensor, dim, parallel_mode)
 
 
 class _ReduceScatterTensor3D(torch.autograd.Function):

@@ -15,6 +15,7 @@ from cubework.utils import (
     get_logger,
     write_logger_to_file,
 )
+from cubework.module import synchronize
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
@@ -119,6 +120,8 @@ def _train(epoch, args):
             scaler.scale(loss).backward()
         else:
             loss.backward()
+
+        synchronize()
 
         if (i + 1) % args.gradient_accumulation or i + 1 == num_steps:
             if scaler is not None:

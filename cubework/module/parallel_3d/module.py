@@ -15,12 +15,14 @@ from .. import init
 from ..utils import set_tensor_parallel_attribute_by_partition, split_tensor, to_2tuple
 from ._operation import classifier_3d, layernorm_3d, linear_3d
 from ._utils import (
-    all_gather_tensor_3d,
+    all_gather_weight_3d,
     broadcast_weight_3d_from_diagonal,
     get_depth_from_env,
     get_input_parallel_mode,
     get_output_parallel_mode,
     get_weight_parallel_mode,
+    get_input_x_weight_parallel_mode,
+    get_output_x_weight_parallel_mode,
     reduce_scatter_tensor_3d,
     split_batch_3d,
     swap_in_out_group,
@@ -34,6 +36,8 @@ class LayerNorm3D(nn.Module):
         self.input_parallel_mode = get_input_parallel_mode()
         self.weight_parallel_mode = get_weight_parallel_mode()
         self.output_parallel_mode = get_output_parallel_mode()
+        self.input_x_weight_parallel_mode = get_input_x_weight_parallel_mode()
+        self.output_x_weight_parallel_mode = get_output_x_weight_parallel_mode()
         self.depth = get_depth_from_env()
         self.normalized_shape = normalized_shape
         self.normalized_shape_per_partition = normalized_shape // self.depth
@@ -65,6 +69,7 @@ class LayerNorm3D(nn.Module):
             self.input_parallel_mode,
             self.weight_parallel_mode,
             self.output_parallel_mode,
+            self.input_x_weight_parallel_mode,
         )
 
 
@@ -84,6 +89,8 @@ class Linear3D(nn.Module):
         self.input_parallel_mode = get_input_parallel_mode()
         self.weight_parallel_mode = get_weight_parallel_mode()
         self.output_parallel_mode = get_output_parallel_mode()
+        self.input_x_weight_parallel_mode = get_input_x_weight_parallel_mode()
+        self.output_x_weight_parallel_mode = get_output_x_weight_parallel_mode()
         self.depth = get_depth_from_env()
         self.in_features_per_partition = in_features // self.depth
         self.out_features_per_partition = out_features // self.depth**2
@@ -121,10 +128,15 @@ class Linear3D(nn.Module):
 
             if self.bias is not None:
                 bias_initializer(self.bias, fan_in=fan_in)
-                weight_src_rank = self.weight_parallel_mode.rank_by_idx(0)
-                output_src_rank = self.output_parallel_mode.rank_by_idx(0)
-                broadcast(self.bias, weight_src_rank, self.weight_parallel_mode)
-                broadcast(self.bias, output_src_rank, self.output_parallel_mode)
+                # weight_src_rank = self.weight_parallel_mode.rank_by_idx(0)
+                # output_src_rank = self.output_parallel_mode.rank_by_idx(0)
+                # broadcast(self.bias, weight_src_rank, self.weight_parallel_mode)
+                # broadcast(self.bias, output_src_rank, self.output_parallel_mode)
+                broadcast(
+                    self.bias,
+                    self.output_x_weight_parallel_mode.rank_by_idx(0),
+                    self.output_x_weight_parallel_mode,
+                )
 
     def forward(self, input_: Tensor) -> Tensor:
         return linear_3d(
@@ -222,6 +234,8 @@ class VocabParallelClassifier3D(nn.Module):
         self.input_parallel_mode = get_input_parallel_mode()
         self.weight_parallel_mode = get_weight_parallel_mode()
         self.output_parallel_mode = get_output_parallel_mode()
+        self.input_x_weight_parallel_mode = get_input_x_weight_parallel_mode()
+        self.output_x_weight_parallel_mode = get_output_x_weight_parallel_mode()
         self.depth = get_depth_from_env()
         self.in_features_per_partition = in_features // self.depth
         self.out_features_per_partition = num_classes // self.depth**2
@@ -267,10 +281,15 @@ class VocabParallelClassifier3D(nn.Module):
 
             if self.bias is not None:
                 bias_initializer(self.bias, fan_in=fan_in)
-                weight_src_rank = self.weight_parallel_mode.rank_by_idx(0)
-                output_src_rank = self.output_parallel_mode.rank_by_idx(0)
-                broadcast(self.bias, weight_src_rank, self.weight_parallel_mode)
-                broadcast(self.bias, output_src_rank, self.output_parallel_mode)
+                # weight_src_rank = self.weight_parallel_mode.rank_by_idx(0)
+                # output_src_rank = self.output_parallel_mode.rank_by_idx(0)
+                # broadcast(self.bias, weight_src_rank, self.weight_parallel_mode)
+                # broadcast(self.bias, output_src_rank, self.output_parallel_mode)
+                broadcast(
+                    self.bias,
+                    self.output_x_weight_parallel_mode.rank_by_idx(0),
+                    self.output_x_weight_parallel_mode,
+                )
 
     def forward(self, input_: Tensor) -> Tensor:
         return linear_3d(
@@ -497,7 +516,7 @@ class VocabParallelEmbedding3D(torch.nn.Module):
         masked_input = input_.clone() - self.vocab_start_index
         masked_input[input_mask] = 0
 
-        weight = all_gather_tensor_3d(self.weight, 0, self.weight_parallel_mode)
+        weight = all_gather_weight_3d(self.weight, 0, self.weight_parallel_mode)
 
         output_parallel = F.embedding(masked_input, weight, self.padding_idx, *self.embed_args, **self.embed_kwargs)
 

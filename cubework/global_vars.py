@@ -23,6 +23,8 @@ PARALLEL_2D_COL = "PARALLEL_2D_COL"
 PARALLEL_3D_INPUT = "PARALLEL_3D_INPUT"
 PARALLEL_3D_WEIGHT = "PARALLEL_3D_WEIGHT"
 PARALLEL_3D_OUTPUT = "PARALLEL_3D_OUTPUT"
+PARALLEL_3D_INPUT_X_WEIGHT = "PARALLEL_3D_INPUT_X_WEIGHT"
+PARALLEL_3D_OUTPUT_X_WEIGHT = "PARALLEL_3D_OUTPUT_X_WEIGHT"
 
 
 class TensorParallelEnv(object):
@@ -46,6 +48,8 @@ class TensorParallelEnv(object):
         input_group_3d=None,
         weight_group_3d=None,
         output_group_3d=None,
+        input_x_weight_group_3d=None,
+        output_x_weight_group_3d=None,
     ):
         self.mode = mode
         self.vocab_parallel = vocab_parallel
@@ -55,6 +59,8 @@ class TensorParallelEnv(object):
         self.input_group_3d = input_group_3d
         self.weight_group_3d = weight_group_3d
         self.output_group_3d = output_group_3d
+        self.input_x_weight_group_3d = input_x_weight_group_3d
+        self.output_x_weight_group_3d = output_x_weight_group_3d
 
     def save(self):
         return dict(
@@ -66,6 +72,8 @@ class TensorParallelEnv(object):
             input_group_3d=self.input_group_3d,
             weight_group_3d=self.weight_group_3d,
             output_group_3d=self.output_group_3d,
+            input_x_weight_group_3d=self.input_x_weight_group_3d,
+            output_x_weight_group_3d=self.output_x_weight_group_3d,
         )
 
 

@@ -354,33 +354,44 @@ def gpt2_xl(checkpoint=True):
     return GPT2(**model_kwargs)
 
 
-def gpt2_3b(checkpoint=True):
+def gpt2_5b(checkpoint=True):
     model_kwargs = dict(
-        hidden_size=2304,
-        intermediate_size=9216,
-        depth=48,
+        hidden_size=2880,
+        intermediate_size=11520,
+        depth=50,
         num_heads=64,
         checkpoint=checkpoint,
     )
     return GPT2(**model_kwargs)
 
 
-def gpt2_6b(checkpoint=True):
+def gpt2_10b(checkpoint=True):
     model_kwargs = dict(
-        hidden_size=3200,
-        intermediate_size=12800,
-        depth=48,
+        hidden_size=4096,
+        intermediate_size=16384,
+        depth=50,
         num_heads=64,
         checkpoint=checkpoint,
     )
     return GPT2(**model_kwargs)
 
 
-def gpt2_12b(checkpoint=True):
+def gpt2_20b(checkpoint=True):
     model_kwargs = dict(
-        hidden_size=4800,
-        intermediate_size=19200,
-        depth=48,
+        hidden_size=5760,
+        intermediate_size=23040,
+        depth=50,
+        num_heads=64,
+        checkpoint=checkpoint,
+    )
+    return GPT2(**model_kwargs)
+
+
+def gpt2_40b(checkpoint=True):
+    model_kwargs = dict(
+        hidden_size=8192,
+        intermediate_size=32768,
+        depth=50,
         num_heads=64,
         checkpoint=checkpoint,
     )

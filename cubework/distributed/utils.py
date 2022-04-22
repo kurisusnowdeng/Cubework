@@ -11,6 +11,8 @@ from cubework.global_vars import (
     PARALLEL_3D_INPUT,
     PARALLEL_3D_OUTPUT,
     PARALLEL_3D_WEIGHT,
+    PARALLEL_3D_INPUT_X_WEIGHT,
+    PARALLEL_3D_OUTPUT_X_WEIGHT,
     TENSOR,
     env,
 )
@@ -103,6 +105,8 @@ class ParallelManager(object):
     PARALLEL_3D_INPUT = ParallelMode(PARALLEL_3D_INPUT)
     PARALLEL_3D_WEIGHT = ParallelMode(PARALLEL_3D_WEIGHT)
     PARALLEL_3D_OUTPUT = ParallelMode(PARALLEL_3D_OUTPUT)
+    PARALLEL_3D_INPUT_X_WEIGHT = ParallelMode(PARALLEL_3D_INPUT_X_WEIGHT)
+    PARALLEL_3D_OUTPUT_X_WEIGHT = ParallelMode(PARALLEL_3D_OUTPUT_X_WEIGHT)
 
 
 def init_global():
@@ -280,6 +284,58 @@ def init_3d_parallel(tensor_parallel_size, seed):
 
     ParallelManager.PARALLEL_3D_OUTPUT.init(
         rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed
+    )
+
+    # input x weight group
+    local_rank = None
+    ranks_in_group = None
+    process_group = None
+    group_world_size = None
+    env.input_x_weight_group_3d = PARALLEL_3D_INPUT_X_WEIGHT
+    for h in range(num_3d_group):
+        for k in range(depth):
+            ranks = [h * depth**3 + i + depth * (j + depth * k) for j in range(depth) for i in range(depth)]
+            group = dist.new_group(ranks)
+
+            if rank in ranks:
+                local_rank = ranks.index(rank)
+                group_world_size = len(ranks)
+                process_group = group
+                ranks_in_group = ranks
+
+    ParallelManager.PARALLEL_3D_INPUT_X_WEIGHT.init(
+        rank,
+        local_rank,
+        group_world_size,
+        process_group,
+        ranks_in_group,
+        seed=seed,
+    )
+
+    # output x weight group
+    local_rank = None
+    ranks_in_group = None
+    process_group = None
+    group_world_size = None
+    env.output_x_weight_group_3d = PARALLEL_3D_OUTPUT_X_WEIGHT
+    for h in range(num_3d_group):
+        for j in range(depth):
+            ranks = [h * depth**3 + i + depth * (j + depth * k) for k in range(depth) for i in range(depth)]
+            group = dist.new_group(ranks)
+
+            if rank in ranks:
+                local_rank = ranks.index(rank)
+                group_world_size = len(ranks)
+                process_group = group
+                ranks_in_group = ranks
+
+    ParallelManager.PARALLEL_3D_OUTPUT_X_WEIGHT.init(
+        rank,
+        local_rank,
+        group_world_size,
+        process_group,
+        ranks_in_group,
+        seed=seed,
     )
 
 

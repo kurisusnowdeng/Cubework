@@ -41,3 +41,4 @@ def synchronize():
         op = async_comm_bucket.pop()
         if op is not None:
             op.wait()
+    torch.cuda.default_stream().synchronize()
