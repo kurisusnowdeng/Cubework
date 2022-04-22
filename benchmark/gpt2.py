@@ -356,9 +356,9 @@ def gpt2_xl(checkpoint=True):
 
 def gpt2_3b(checkpoint=True):
     model_kwargs = dict(
-        hidden_size=1920,
-        intermediate_size=7680,
-        depth=64,
+        hidden_size=2304,
+        intermediate_size=9216,
+        depth=48,
         num_heads=64,
         checkpoint=checkpoint,
     )
@@ -367,9 +367,9 @@ def gpt2_3b(checkpoint=True):
 
 def gpt2_6b(checkpoint=True):
     model_kwargs = dict(
-        hidden_size=2560,
-        intermediate_size=10240,
-        depth=72,
+        hidden_size=3200,
+        intermediate_size=12800,
+        depth=48,
         num_heads=64,
         checkpoint=checkpoint,
     )
@@ -378,9 +378,9 @@ def gpt2_6b(checkpoint=True):
 
 def gpt2_12b(checkpoint=True):
     model_kwargs = dict(
-        hidden_size=3200,
-        intermediate_size=12800,
-        depth=96,
+        hidden_size=4800,
+        intermediate_size=19200,
+        depth=48,
         num_heads=64,
         checkpoint=checkpoint,
     )
