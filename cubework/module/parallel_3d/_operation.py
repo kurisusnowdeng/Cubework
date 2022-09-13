@@ -50,29 +50,29 @@ class _Linear3D(torch.autograd.Function):
         with torch.no_grad():
             output_grad = all_gather(output_grad, ctx.output_dim, ctx.output_parallel_mode)
 
-            # async_ops = list()
+            async_ops = list()
 
             weight_grad = torch.matmul(
                 input_.reshape(-1, input_.shape[-1]).transpose(0, 1), output_grad.reshape(-1, output_grad.shape[-1])
             )
             weight_grad, op = reduce_scatter(weight_grad, ctx.weight_dim, ctx.weight_parallel_mode, async_op=True)
-            # async_ops.append(op)
-            async_comm_bucket.append(op)
+            async_ops.append(op)
+            # async_comm_bucket.append(op)
 
             if ctx.use_bias:
                 bias_grad = torch.sum(output_grad, dim=tuple(range(len(output_grad.shape))[:-1]))
                 bias_grad, op = all_reduce(bias_grad, ctx.weight_parallel_mode, async_op=True)
-                # async_ops.append(op)
-                async_comm_bucket.append(op)
+                async_ops.append(op)
+                # async_comm_bucket.append(op)
             else:
                 bias_grad = None
 
             input_grad = torch.matmul(output_grad, weight.transpose(0, 1))
             input_grad = reduce_scatter(input_grad, ctx.input_dim, ctx.input_parallel_mode)
 
-            # for op in async_ops:
-            #     if op is not None:
-            #         op.wait()
+            for op in async_ops:
+                if op is not None:
+                    op.wait()
 
         return input_grad, weight_grad, bias_grad, None, None, None, None, None, None
 
