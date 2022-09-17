@@ -13,6 +13,7 @@ from transformers.optimization import get_cosine_schedule_with_warmup
 
 
 class ViTEmbedding(nn.Module):
+
     def __init__(
         self,
         img_size: int,
@@ -44,6 +45,7 @@ class ViTEmbedding(nn.Module):
 
 
 class ViTSelfAttention(nn.Module):
+
     def __init__(
         self,
         hidden_size: int,
@@ -91,7 +93,7 @@ class ViTSelfAttention(nn.Module):
 
         x = torch.matmul(x, v)
         x = x.transpose(1, 2)
-        new_context_layer_shape = x.size()[:-2] + (all_head_size,)
+        new_context_layer_shape = x.size()[:-2] + (all_head_size, )
         x = x.reshape(new_context_layer_shape)
 
         x = self.dense(x)
@@ -101,6 +103,7 @@ class ViTSelfAttention(nn.Module):
 
 
 class ViTMLP(nn.Module):
+
     def __init__(
         self,
         hidden_size: int,
@@ -141,6 +144,7 @@ class ViTMLP(nn.Module):
 
 
 class ViTHead(nn.Module):
+
     def __init__(
         self,
         hidden_size: int,
@@ -181,6 +185,7 @@ class ViTHead(nn.Module):
 
 
 class ViTBlock(nn.Module):
+
     def __init__(
         self,
         hidden_size: int,
@@ -230,6 +235,7 @@ class ViTBlock(nn.Module):
 
 
 class VisionTransformer(nn.Module):
+
     def __init__(
         self,
         img_size: int = 224,
@@ -274,8 +280,7 @@ class VisionTransformer(nn.Module):
                 dtype=dtype,
                 bias=bias,
                 checkpoint=checkpoint,
-            )
-            for i in range(depth)
+            ) for i in range(depth)
         ]
 
         self.norm = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon, dtype=dtype)
@@ -377,10 +382,10 @@ def vit_12b(checkpoint=True):
     return VisionTransformer(**model_kwargs)
 
 
-def _mixup_data(features, alpha=0.0, train=True):
+def _mixup_data(features, transform, alpha=0.0, train=True):
     x, y = tuple(zip(*features))
-    x = torch.stack(x)
-    y = torch.stack(tuple(map(lambda x: torch.tensor(x), y)))
+    x = torch.stack([transform(i) for i in x])
+    y = torch.as_tensor(y)
 
     if train:
         if alpha > 0:
@@ -416,6 +421,7 @@ def _mixup_data(features, alpha=0.0, train=True):
 
 
 class MixupLoss(torch.nn.Module):
+
     def __init__(self):
         super().__init__()
         self.loss_fn = cube_nn.CrossEntropyLoss()
@@ -426,6 +432,7 @@ class MixupLoss(torch.nn.Module):
 
 
 class MixupAccuracy(cube_nn.Accuracy):
+
     def forward(self, logits, targets, loss):
         targets = targets["y_a"]
         return super().forward(logits, targets, loss)
@@ -437,47 +444,41 @@ def build_model(args):
 
 
 def build_data(args):
-    transform_train = transforms.Compose(
-        [
-            transforms.RandomResizedCrop(224),
-            transforms.AutoAugment(policy=transforms.AutoAugmentPolicy.IMAGENET),
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        ]
-    )
-    transform_test = transforms.Compose(
-        [
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        ]
-    )
+    transform_train = transforms.Compose([
+        transforms.RandomResizedCrop(224),
+        transforms.AutoAugment(policy=transforms.AutoAugmentPolicy.IMAGENET),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
+    transform_test = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
 
-    train_dataset = torchvision.datasets.CIFAR10(
-        root=args.dataset_path, train=True, download=True, transform=transform_train
-    )
-    test_dataset = torchvision.datasets.CIFAR10(root=args.dataset_path, train=False, transform=transform_test)
+    train_dataset = torchvision.datasets.CIFAR10(root=args.dataset_path, train=True, download=True)
+    test_dataset = torchvision.datasets.CIFAR10(root=args.dataset_path, train=False)
     train_data = get_dataloader(
         dataset=train_dataset,
         shuffle=True,
         batch_size=args.batch_size,
         drop_last=True,
-        collate_fn=partial(_mixup_data, alpha=0.8, train=True),
+        collate_fn=partial(_mixup_data, transform=transform_train, alpha=0.8, train=True),
         num_workers=1,
         pin_memory=True,
     )
     test_data = get_dataloader(
         dataset=test_dataset,
         batch_size=args.batch_size,
-        collate_fn=partial(_mixup_data, alpha=0.8, train=False),
+        collate_fn=partial(_mixup_data, transform=transform_test, alpha=0.8, train=False),
         num_workers=1,
         pin_memory=True,
     )
     return train_data, test_data
 
 
-def build_criterion(args):
+def build_criterion():
     return MixupLoss(), MixupAccuracy()
 
 
@@ -489,9 +490,9 @@ def build_optimizer(args, params):
 def build_scheduler(args, n_steps, optimizer):
     max_steps = n_steps * args.num_epochs
     warmup_steps = n_steps * args.warmup_epochs
-    lr_scheduler = get_cosine_schedule_with_warmup(
-        optimizer, num_warmup_steps=warmup_steps, num_training_steps=max_steps
-    )
+    lr_scheduler = get_cosine_schedule_with_warmup(optimizer,
+                                                   num_warmup_steps=warmup_steps,
+                                                   num_training_steps=max_steps)
     return lr_scheduler
 
 
@@ -504,7 +505,7 @@ def build_vit(args):
     train_data, test_data = build_data(args)
     logger.info("Train and test data are built.")
 
-    criterion, metric = build_criterion(args)
+    criterion, metric = build_criterion()
     logger.info("Loss and metric function are built.")
 
     optimizer = build_optimizer(args, model.parameters())

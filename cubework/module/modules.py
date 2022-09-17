@@ -104,6 +104,7 @@ def partition_batch(input_):
 
 
 class LayerNorm(CubeModule):
+
     def __init__(self, normalized_shape: int, eps=1e-05, dtype=None) -> None:
         tensor_parallel = get_tensor_parallel_mode()
         if tensor_parallel is None:
@@ -114,16 +115,15 @@ class LayerNorm(CubeModule):
 
 
 class Linear(CubeModule):
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        bias: bool = True,
-        dtype: dtype = None,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
-        **kwargs
-    ) -> None:
+
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 bias: bool = True,
+                 dtype: dtype = None,
+                 weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+                 bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+                 **kwargs) -> None:
         tensor_parallel = get_tensor_parallel_mode()
         if tensor_parallel is None:
             layer = nn.Linear(in_features, out_features, bias=bias).to(dtype).to(get_current_device())
@@ -144,19 +144,17 @@ class Linear(CubeModule):
 
 
 class Classifier(CubeModule):
-    def __init__(
-        self,
-        in_features: int,
-        num_classes: int,
-        weight: nn.Parameter = None,
-        bias: bool = True,
-        dtype: dtype = None,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
-        vocab_parallel_limit=1024,
-    ):
+
+    def __init__(self,
+                 in_features: int,
+                 num_classes: int,
+                 weight: nn.Parameter = None,
+                 bias: bool = True,
+                 vocab_parallel: bool = False,
+                 dtype: dtype = None,
+                 weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+                 bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1)):
         tensor_parallel = get_tensor_parallel_mode()
-        vocab_parallel = tensor_parallel is not None and num_classes > vocab_parallel_limit
         vocab_parallel = getattr(weight, VOCAB_PARALLEL, vocab_parallel)
         if vocab_parallel:
             layer = _vocab_parallel_classifier[tensor_parallel](
@@ -182,27 +180,23 @@ class Classifier(CubeModule):
 
 
 class Embedding(CubeModule):
-    def __init__(
-        self,
-        num_embeddings: int,
-        embedding_dim: int,
-        padding_idx: int = None,
-        dtype: dtype = None,
-        weight_initializer: Callable = init.normal_(),
-        vocab_parallel_limit: int = 1024,
-        *args,
-        **kwargs
-    ) -> None:
+
+    def __init__(self,
+                 num_embeddings: int,
+                 embedding_dim: int,
+                 vocab_parallel: bool = False,
+                 padding_idx: int = None,
+                 dtype: dtype = None,
+                 weight_initializer: Callable = init.normal_(),
+                 *args,
+                 **kwargs) -> None:
         tensor_parallel = get_tensor_parallel_mode()
         if tensor_parallel is None:
-            embed = (
-                nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx, *args, **kwargs)
-                .to(dtype)
-                .to(get_current_device())
-            )
+            embed = nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx, *args,
+                                 **kwargs).to(dtype).to(get_current_device())
             weight_initializer(embed.weight, fan_in=num_embeddings, fan_out=embedding_dim)
-        elif num_embeddings <= vocab_parallel_limit:
-            embed = _parallel_embedding[tensor_parallel](
+        elif vocab_parallel:
+            embed = _vocab_parallel_embedding[tensor_parallel](
                 num_embeddings,
                 embedding_dim,
                 padding_idx=padding_idx,
@@ -212,7 +206,7 @@ class Embedding(CubeModule):
                 **kwargs,
             )
         else:
-            embed = _vocab_parallel_embedding[tensor_parallel](
+            embed = _parallel_embedding[tensor_parallel](
                 num_embeddings,
                 embedding_dim,
                 padding_idx=padding_idx,
@@ -225,17 +219,18 @@ class Embedding(CubeModule):
 
 
 class PatchEmbedding(CubeModule):
+
     def __init__(
-        self,
-        img_size: int,
-        patch_size: int,
-        in_chans: int,
-        embed_size: int,
-        dtype: dtype = None,
-        flatten: bool = True,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
-        position_embed_initializer: Callable = init.zeros_(),
+            self,
+            img_size: int,
+            patch_size: int,
+            in_chans: int,
+            embed_size: int,
+            dtype: dtype = None,
+            flatten: bool = True,
+            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+            position_embed_initializer: Callable = init.zeros_(),
     ):
         tensor_parallel = get_tensor_parallel_mode()
         embed = _parallel_patchembedding[tensor_parallel](
@@ -253,6 +248,7 @@ class PatchEmbedding(CubeModule):
 
 
 class Dropout(CubeModule):
+
     def __init__(self, p: float = 0.5, inplace: bool = False) -> None:
         tensor_parallel = get_tensor_parallel_mode()
         if tensor_parallel == "1d":

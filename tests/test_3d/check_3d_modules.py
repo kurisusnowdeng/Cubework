@@ -1,22 +1,13 @@
 import time
 
 import torch
+from cubework.module import synchronize
 from cubework.module.loss.loss_3d import CrossEntropyLoss3D, VocabParallelCrossEntropyLoss3D
 from cubework.module.module_std import ClassifierSTD, PatchEmbeddingSTD
-from cubework.module.parallel_3d import (
-    Classifier3D,
-    Embedding3D,
-    LayerNorm3D,
-    Linear3D,
-    PatchEmbedding3D,
-    VocabParallelClassifier3D,
-    VocabParallelEmbedding3D,
-)
-from cubework.module.parallel_3d._utils import (
-    get_input_parallel_mode,
-    get_output_parallel_mode,
-    get_weight_parallel_mode,
-)
+from cubework.module.parallel_3d import (Classifier3D, Embedding3D, LayerNorm3D, Linear3D, PatchEmbedding3D,
+                                         VocabParallelClassifier3D, VocabParallelEmbedding3D)
+from cubework.module.parallel_3d._utils import (get_input_parallel_mode, get_output_parallel_mode,
+                                                get_weight_parallel_mode)
 from cubework.utils import get_current_device, get_logger
 
 DEPTH = 2
@@ -31,7 +22,7 @@ VOCAB_SIZE = 16
 
 def check_equal(A, B):
     eq = torch.allclose(A, B, rtol=1e-3, atol=1e-2)
-    assert eq
+    assert eq, f"\nA = {A}\nB = {B}"
     return eq
 
 
@@ -99,6 +90,7 @@ def check_linear():
 
     bwd_start = time.time()
     out.backward(grad)
+    synchronize(layer.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("linear backward: {:.3f} s".format(bwd_end - bwd_start))
@@ -166,11 +158,8 @@ def check_layernorm():
     out = norm(A)
     torch.cuda.synchronize()
     fwd_end = time.time()
-    logger.info(
-        "layer norm forward: pass | {0} --> {1} | {2:.3f} s".format(
-            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
-        )
-    )
+    logger.info("layer norm forward: pass | {0} --> {1} | {2:.3f} s".format(tuple(A.shape), tuple(out.shape),
+                                                                            fwd_end - fwd_start))
 
     A_master = A_master.clone()
     A_master.requires_grad = True
@@ -189,6 +178,7 @@ def check_layernorm():
 
     bwd_start = time.time()
     out.backward(grad)
+    synchronize(norm.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("layer norm backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -256,9 +246,7 @@ def check_classifier_no_given_weight():
     fwd_end = time.time()
     logger.info(
         "classifier (no given weight) forward: pass | {0} --> {1} | {2:.3f} s".format(
-            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
-        ),
-    )
+            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start),)
     A_master = A_master.clone()
     A_master.requires_grad = True
     C_master = layer_master(A_master)
@@ -275,6 +263,7 @@ def check_classifier_no_given_weight():
 
     bwd_start = time.time()
     out.backward(grad)
+    synchronize(layer.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("classifier (no given weight) backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -285,29 +274,21 @@ def check_classifier_no_given_weight():
     A_grad = torch.chunk(A_grad, DEPTH, dim=0)[i]
     A_grad = torch.chunk(A_grad, DEPTH, dim=-1)[k]
     A_grad = torch.chunk(A_grad, DEPTH, dim=0)[j]
-    logger.info(
-        "Rank {} classifier (no given weight) backward (input_grad): {}".format(rank, check_equal(A_grad, A.grad))
-    )
+    logger.info("Rank {} classifier (no given weight) backward (input_grad): {}".format(
+        rank, check_equal(A_grad, A.grad)))
 
     B_grad = layer_master.weight.grad
     B_grad = torch.chunk(B_grad, DEPTH, dim=-1)[k]
     if j == k:
-        logger.info(
-            "Rank {} classifier (no given weight) backward (weight_grad): {}".format(
-                rank, check_equal(B_grad, layer.weight.grad)
-            )
-        )
+        logger.info("Rank {} classifier (no given weight) backward (weight_grad): {}".format(
+            rank, check_equal(B_grad, layer.weight.grad)))
     else:
-        logger.info(
-            "Rank {} classifier (no given weight) backward (weight_grad): {}".format(rank, layer.weight.grad is None)
-        )
+        logger.info("Rank {} classifier (no given weight) backward (weight_grad): {}".format(
+            rank, layer.weight.grad is None))
 
     bias_grad = layer_master.bias.grad
-    logger.info(
-        "Rank {} classifier (no given weight) backward (bias_grad): {}".format(
-            rank, check_equal(bias_grad, layer.bias.grad)
-        )
-    )
+    logger.info("Rank {} classifier (no given weight) backward (bias_grad): {}".format(
+        rank, check_equal(bias_grad, layer.bias.grad)))
 
     return fwd_end - fwd_start, bwd_end - bwd_start
 
@@ -360,9 +341,7 @@ def check_vocab_parallel_classifier_no_given_weight():
     fwd_end = time.time()
     logger.info(
         "vocab parallel classifier (no given weight) forward: pass | {0} --> {1} | {2:.3f} s".format(
-            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
-        ),
-    )
+            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start),)
     A_master = A_master.clone()
     A_master.requires_grad = True
     C_master = layer_master(A_master)
@@ -381,6 +360,7 @@ def check_vocab_parallel_classifier_no_given_weight():
 
     bwd_start = time.time()
     out.backward(grad)
+    synchronize(layer.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("vocab parallel classifier (no given weight) backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -391,113 +371,20 @@ def check_vocab_parallel_classifier_no_given_weight():
     A_grad = torch.chunk(A_grad, DEPTH, dim=0)[i]
     A_grad = torch.chunk(A_grad, DEPTH, dim=-1)[k]
     A_grad = torch.chunk(A_grad, DEPTH, dim=0)[j]
-    logger.info(
-        "Rank {} vocab parallel classifier (no given weight) backward (input_grad): {}".format(
-            rank, check_equal(A_grad, A.grad)
-        )
-    )
+    logger.info("Rank {} vocab parallel classifier (no given weight) backward (input_grad): {}".format(
+        rank, check_equal(A_grad, A.grad)))
 
     B_grad = layer_master.weight.grad
     B_grad = torch.chunk(B_grad, DEPTH, dim=0)[j]
     B_grad = torch.chunk(B_grad, DEPTH, dim=0)[i]
     B_grad = torch.chunk(B_grad, DEPTH, dim=-1)[k]
-    logger.info(
-        "Rank {} vocab parallel classifier (no given weight) backward (weight_grad): {}".format(
-            rank, check_equal(B_grad, layer.weight.grad)
-        )
-    )
+    logger.info("Rank {} vocab parallel classifier (no given weight) backward (weight_grad): {}".format(
+        rank, check_equal(B_grad, layer.weight.grad)))
 
     bias_grad = layer_master.bias.grad
     bias_grad = torch.chunk(bias_grad, DEPTH)[j]
-    logger.info(
-        "Rank {} vocab parallel classifier (no given weight) backward (bias_grad): {}".format(
-            rank, check_equal(bias_grad, layer.bias.grad)
-        )
-    )
-
-    return fwd_end - fwd_start, bwd_end - bwd_start
-
-
-def check_classifier_given_embed_weight():
-    logger = get_logger()
-    rank = torch.distributed.get_rank()
-
-    device = get_current_device()
-    dtype = torch.float32
-
-    input_parallel_mode = get_input_parallel_mode()
-    weight_parallel_mode = get_weight_parallel_mode()
-    output_parallel_mode = get_output_parallel_mode()
-
-    j = input_parallel_mode.local_rank
-    i = weight_parallel_mode.local_rank
-    k = output_parallel_mode.local_rank
-
-    embed = Embedding3D(VOCAB_SIZE, HIDDEN_SIZE)
-    embed = embed.to(dtype).to(device)
-
-    embed_master = torch.nn.Embedding(VOCAB_SIZE, HIDDEN_SIZE)
-    embed_master = embed_master.to(dtype).to(device)
-
-    weight_master = embed_master.weight.data
-    torch.distributed.broadcast(weight_master, src=0)
-    weight = torch.chunk(weight_master, DEPTH, dim=-1)[k]
-    embed.weight.data.copy_(weight)
-
-    layer = Classifier3D(HIDDEN_SIZE, VOCAB_SIZE, weight=embed.weight, bias=False)
-    layer = layer.to(dtype).to(device)
-
-    layer_master = ClassifierSTD(HIDDEN_SIZE, VOCAB_SIZE, weight=embed_master.weight, bias=False)
-    layer_master = layer_master.to(dtype).to(device)
-
-    A_shape = (BATCH_SIZE, SEQ_LENGTH)
-    A_master = torch.randint(VOCAB_SIZE, A_shape, device=device)
-    torch.distributed.broadcast(A_master, src=0)
-    A = A_master.clone()
-
-    fwd_start = time.time()
-    out = layer(embed(A))
-    torch.cuda.synchronize()
-    fwd_end = time.time()
-    logger.info(
-        "classifier (given embed weight) forward: pass | {0} --> {1} | {2:.3f} s".format(
-            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
-        ),
-    )
-    A_master = A_master.clone()
-    C_master = layer_master(embed_master(A_master))
-    C = torch.chunk(C_master, DEPTH, dim=0)[i]
-    C = torch.chunk(C, DEPTH, dim=0)[j]
-    logger.info("Rank {} classifier (given embed weight) forward: {}".format(rank, check_equal(out, C)))
-
-    grad_shape = C_master.shape
-    grad_master = torch.randn(grad_shape, dtype=dtype, device=get_current_device())
-    torch.distributed.broadcast(grad_master, src=0)
-    grad = torch.chunk(grad_master, DEPTH, dim=0)[i]
-    grad = torch.chunk(grad, DEPTH, dim=0)[j]
-    grad = grad.clone()
-
-    bwd_start = time.time()
-    out.backward(grad)
-    torch.cuda.synchronize()
-    bwd_end = time.time()
-    logger.info("classifier (given embed weight) backward: pass | {:.3f} s".format(bwd_end - bwd_start))
-
-    grad_master = grad_master.clone()
-    C_master.backward(grad_master)
-
-    B_grad = embed_master.weight.grad
-    B_grad = torch.chunk(B_grad, DEPTH, dim=-1)[k]
-    if j == k:
-        logger.info(
-            "Rank {} classifier (given embed weight) backward (weight_grad): {}".format(
-                rank, check_equal(B_grad, embed.weight.grad)
-            )
-        )
-    else:
-        logger.info(
-            "Rank {} classifier (given embed weight) backward (weight_grad): {}".format(rank, embed.weight.grad is None)
-        )
+    logger.info("Rank {} vocab parallel classifier (no given weight) backward (bias_grad): {}".format(
+        rank, check_equal(bias_grad, layer.bias.grad)))
 
     return fwd_end - fwd_start, bwd_end - bwd_start
 
@@ -547,9 +434,7 @@ def check_vocab_parallel_classifier_given_embed_weight():
     fwd_end = time.time()
     logger.info(
         "vocab parallel classifier (given embed weight) forward: pass | {0} --> {1} | {2:.3f} s".format(
-            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
-        ),
-    )
+            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start),)
     A_master = A_master.clone()
     C_master = layer_master(embed_master(A_master))
     C = torch.chunk(C_master, DEPTH, dim=0)[i]
@@ -567,6 +452,8 @@ def check_vocab_parallel_classifier_given_embed_weight():
 
     bwd_start = time.time()
     out.backward(grad)
+    synchronize(layer.parameters())
+    synchronize(embed.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("vocab parallel classifier (given embed weight) backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -578,9 +465,8 @@ def check_vocab_parallel_classifier_given_embed_weight():
     B_grad = torch.chunk(B_grad, DEPTH, dim=0)[j]
     B_grad = torch.chunk(B_grad, DEPTH, dim=0)[i]
     B_grad = torch.chunk(B_grad, DEPTH, dim=-1)[k]
-    logger.info(
-        "Rank {} vocab parallel embed backward (weight_grad): {}".format(rank, check_equal(B_grad, embed.weight.grad))
-    )
+    logger.info("Rank {} vocab parallel classifier (given embed weight) backward (weight_grad): {}".format(
+        rank, check_equal(B_grad, embed.weight.grad)))
 
     return fwd_end - fwd_start, bwd_end - bwd_start
 
@@ -629,10 +515,8 @@ def check_patch_embed():
     torch.cuda.synchronize()
     fwd_end = time.time()
     logger.info(
-        "patch embed forward: pass | {0} --> {1} | {2:.3f} s".format(
-            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
-        ),
-    )
+        "patch embed forward: pass | {0} --> {1} | {2:.3f} s".format(tuple(A.shape), tuple(out.shape),
+                                                                     fwd_end - fwd_start),)
 
     A_master = A_master.clone()
     C_master = layer_master(A_master)
@@ -651,6 +535,7 @@ def check_patch_embed():
 
     bwd_start = time.time()
     out.backward(grad)
+    synchronize(layer.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("patch embed backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -664,21 +549,18 @@ def check_patch_embed():
 
     pos_grad_master = layer_master.pos_embed.grad
     pos_grad = torch.chunk(pos_grad_master, DEPTH, dim=-1)[k]
-    logger.info(
-        "Rank {} patch embed backward (pos_embed_grad): {}".format(rank, check_equal(pos_grad, layer.pos_embed.grad))
-    )
+    logger.info("Rank {} patch embed backward (pos_embed_grad): {}".format(rank,
+                                                                           check_equal(pos_grad, layer.pos_embed.grad)))
 
     B_grad = layer_master.weight.grad
     B_grad = torch.chunk(B_grad, DEPTH, dim=0)[k]
-    logger.info(
-        "Rank {} patch embed backward (proj_weight_grad): {}".format(rank, check_equal(B_grad, layer.weight.grad))
-    )
+    logger.info("Rank {} patch embed backward (proj_weight_grad): {}".format(rank,
+                                                                             check_equal(B_grad, layer.weight.grad)))
 
     bias_grad = layer_master.bias.grad
     bias_grad = torch.chunk(bias_grad, DEPTH)[k]
-    logger.info(
-        "Rank {} patch embed backward (proj_bias_grad): {}".format(rank, check_equal(bias_grad, layer.bias.grad))
-    )
+    logger.info("Rank {} patch embed backward (proj_bias_grad): {}".format(rank,
+                                                                           check_equal(bias_grad, layer.bias.grad)))
 
     return fwd_end - fwd_start, bwd_end - bwd_start
 
@@ -717,9 +599,8 @@ def check_embed():
     out = layer(A)
     torch.cuda.synchronize()
     fwd_end = time.time()
-    logger.info(
-        "embed forward: pass | {0} --> {1} | {2:.3f} s".format(tuple(A.shape), tuple(out.shape), fwd_end - fwd_start)
-    )
+    logger.info("embed forward: pass | {0} --> {1} | {2:.3f} s".format(tuple(A.shape), tuple(out.shape),
+                                                                       fwd_end - fwd_start))
 
     A_master = A_master.clone()
     C_master = layer_master(A_master)
@@ -737,6 +618,7 @@ def check_embed():
     grad = grad.clone()
     bwd_start = time.time()
     out.backward(grad)
+    synchronize(layer.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("embed backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -746,10 +628,7 @@ def check_embed():
 
     B_grad = layer_master.weight.grad
     B_grad = torch.chunk(B_grad, DEPTH, dim=-1)[k]
-    if j == k:
-        logger.info("Rank {} embed backward (weight_grad): {}".format(rank, check_equal(B_grad, layer.weight.grad)))
-    else:
-        logger.info("Rank {} embed backward (weight_grad): {}".format(rank, layer.weight.grad is None))
+    logger.info("Rank {} embed backward (weight_grad): {}".format(rank, check_equal(B_grad, layer.weight.grad)))
 
     return fwd_end - fwd_start, bwd_end - bwd_start
 
@@ -790,11 +669,8 @@ def check_vocab_parallel_embed():
     out = layer(A)
     torch.cuda.synchronize()
     fwd_end = time.time()
-    logger.info(
-        "vocab parallel embed forward: pass | {0} --> {1} | {2:.3f} s".format(
-            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start
-        )
-    )
+    logger.info("vocab parallel embed forward: pass | {0} --> {1} | {2:.3f} s".format(
+        tuple(A.shape), tuple(out.shape), fwd_end - fwd_start))
 
     A_master = A_master.clone()
     C_master = layer_master(A_master)
@@ -812,6 +688,7 @@ def check_vocab_parallel_embed():
     grad = grad.clone()
     bwd_start = time.time()
     out.backward(grad)
+    synchronize(layer.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("vocab parallel embed backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -823,9 +700,9 @@ def check_vocab_parallel_embed():
     B_grad = torch.chunk(B_grad, DEPTH, dim=0)[j]
     B_grad = torch.chunk(B_grad, DEPTH, dim=0)[i]
     B_grad = torch.chunk(B_grad, DEPTH, dim=-1)[k]
-    logger.info(
-        "Rank {} vocab parallel embed backward (weight_grad): {}".format(rank, check_equal(B_grad, layer.weight.grad))
-    )
+    logger.info("Rank {} vocab parallel embed backward (weight_grad): {}".format(rank,
+                                                                                 check_equal(B_grad,
+                                                                                             layer.weight.grad)))
 
     return fwd_end - fwd_start, bwd_end - bwd_start
 
@@ -859,11 +736,8 @@ def check_loss():
     fwd_start = time.time()
     loss = criterion(out, target_master)
     fwd_end = time.time()
-    logger.info(
-        "cross entropy loss forward: pass | {0} --> {1} | {2:.3f} s".format(
-            tuple(out.shape), tuple(loss.shape), fwd_end - fwd_start
-        )
-    )
+    logger.info("cross entropy loss forward: pass | {0} --> {1} | {2:.3f} s".format(tuple(out.shape), tuple(loss.shape),
+                                                                                    fwd_end - fwd_start))
 
     out_master = out_master.clone()
     out_master.requires_grad = True
@@ -916,11 +790,8 @@ def check_vocab_parallel_loss():
     fwd_start = time.time()
     loss = criterion(out, target_master)
     fwd_end = time.time()
-    logger.info(
-        "vocab parallel cross entropy loss forward: pass | {0} --> {1} | {2:.3f} s".format(
-            tuple(out.shape), tuple(loss.shape), fwd_end - fwd_start
-        )
-    )
+    logger.info("vocab parallel cross entropy loss forward: pass | {0} --> {1} | {2:.3f} s".format(
+        tuple(out.shape), tuple(loss.shape), fwd_end - fwd_start))
 
     out_master = out_master.clone()
     out_master.requires_grad = True

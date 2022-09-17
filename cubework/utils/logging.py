@@ -49,4 +49,9 @@ def write_logger_to_file(file, logger=None):
 
 
 def get_logger():
-    return _default_logger
+    if _default_logger is None:
+        logger = logging.getLogger()
+        logger.setLevel(logging.NOTSET)
+        return logger
+    else:
+        return _default_logger

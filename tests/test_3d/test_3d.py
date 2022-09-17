@@ -7,7 +7,6 @@ import torch.multiprocessing as mp
 from cubework.utils import free_port
 
 from check_3d_modules import (
-    check_classifier_given_embed_weight,
     check_classifier_no_given_weight,
     check_embed,
     check_layernorm,
@@ -32,12 +31,11 @@ def run(rank, world_size, port):
     check_layernorm()
     check_linear()
     check_embed()
+    check_vocab_parallel_embed()
+    check_patch_embed()
     check_classifier_no_given_weight()
-    check_classifier_given_embed_weight()
     check_vocab_parallel_classifier_no_given_weight()
     check_vocab_parallel_classifier_given_embed_weight()
-    check_patch_embed()
-    check_vocab_parallel_embed()
     check_loss()
     check_vocab_parallel_loss()
 

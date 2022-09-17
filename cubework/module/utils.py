@@ -1,5 +1,4 @@
 import collections.abc
-from collections import deque
 from itertools import repeat
 
 import torch
@@ -15,6 +14,7 @@ def get_tensor_parallel_mode():
 
 
 def _ntuple(n):
+
     def parse(x):
         if isinstance(x, collections.abc.Iterable):
             return x
@@ -33,12 +33,34 @@ def split_tensor(tensor, dim, parallel_mode):
     return output
 
 
-async_comm_bucket = deque()
+class AsyncGradientBucket(object):
+
+    def __init__(self):
+        self.bucket = dict()
+
+    def push(self, async_op, grad_tensor, param_id):
+        self.bucket[param_id] = tuple((async_op, grad_tensor))
+        return None
+
+    def synchronize(self, params):
+        for p in params:
+            i = id(p)
+            if i in self.bucket:
+                op, grad = self.bucket.pop(i)
+                op.wait()
+                if p.grad is None:
+                    p.grad = grad
+                else:
+                    p.grad.add_(grad)
+        torch.cuda.default_stream().synchronize()
 
 
-def synchronize():
-    while len(async_comm_bucket) > 0:
-        op = async_comm_bucket.pop()
-        if op is not None:
-            op.wait()
-    torch.cuda.default_stream().synchronize()
+_async_grad_bucket = AsyncGradientBucket()
+
+
+def push_async_grad(op, grad, param_id):
+    return _async_grad_bucket.push(op, grad, param_id)
+
+
+def synchronize(params):
+    return _async_grad_bucket.synchronize(params)

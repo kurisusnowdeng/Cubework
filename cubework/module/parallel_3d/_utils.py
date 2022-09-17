@@ -7,7 +7,7 @@ from cubework.distributed.utils import ParallelMode
 from cubework.global_vars import env
 from torch import Tensor
 from torch.cuda.amp import custom_bwd, custom_fwd
-from ..utils import async_comm_bucket
+from ..utils import push_async_grad
 
 
 def get_depth_from_env() -> int:
@@ -58,6 +58,7 @@ def split_batch_3d(
 
 
 class _ReduceTensor3D(torch.autograd.Function):
+
     @staticmethod
     def forward(ctx, input_, parallel_mode):
         return all_reduce(input_, parallel_mode)
@@ -72,6 +73,7 @@ def reduce_tensor_3d(tensor: Tensor, parallel_mode: ParallelMode) -> Tensor:
 
 
 class _AllGatherWeight3D(torch.autograd.Function):
+
     @staticmethod
     def forward(ctx, weight, dim, parallel_mode):
         ctx.dim = dim
@@ -81,8 +83,7 @@ class _AllGatherWeight3D(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, output_grad):
-        grad, op = reduce_scatter(output_grad, ctx.dim, ctx.parallel_mode, async_op=True)
-        async_comm_bucket.append(op)
+        grad = reduce_scatter(output_grad, ctx.dim, ctx.parallel_mode)
         return grad, None, None
 
 
@@ -91,6 +92,7 @@ def all_gather_weight_3d(tensor: Tensor, dim: int, parallel_mode: ParallelMode) 
 
 
 class _ReduceScatterTensor3D(torch.autograd.Function):
+
     @staticmethod
     def forward(ctx, input_, dim, parallel_mode):
         ctx.dim = dim
@@ -108,6 +110,7 @@ def reduce_scatter_tensor_3d(tensor: Tensor, dim: int, parallel_mode: ParallelMo
 
 
 class _ReduceByBatch3D(torch.autograd.Function):
+
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
     def forward(
@@ -135,13 +138,15 @@ class _ReduceByBatch3D(torch.autograd.Function):
             return output_grad, None, None, None
 
 
-def reduce_by_batch_3d(
-    tensor: Tensor, input_parallel_mode: ParallelMode, weight_parallel_mode: ParallelMode, reduce_mean: bool = False
-) -> Tensor:
+def reduce_by_batch_3d(tensor: Tensor,
+                       input_parallel_mode: ParallelMode,
+                       weight_parallel_mode: ParallelMode,
+                       reduce_mean: bool = False) -> Tensor:
     return _ReduceByBatch3D.apply(tensor, input_parallel_mode, weight_parallel_mode, reduce_mean)
 
 
 class _BroadcastWeight3D_FromDiagonal(torch.autograd.Function):
+
     @staticmethod
     @custom_fwd(cast_inputs=torch.float16)
     def forward(
@@ -176,6 +181,5 @@ def broadcast_weight_3d_from_diagonal(
     weight_parallel_mode: ParallelMode,
     output_parallel_mode: ParallelMode,
 ) -> Tensor:
-    return _BroadcastWeight3D_FromDiagonal.apply(
-        tensor, input_parallel_mode, weight_parallel_mode, output_parallel_mode
-    )
+    return _BroadcastWeight3D_FromDiagonal.apply(tensor, input_parallel_mode, weight_parallel_mode,
+                                                 output_parallel_mode)

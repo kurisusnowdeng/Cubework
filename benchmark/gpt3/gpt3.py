@@ -1,18 +1,18 @@
-import copy
 import math
-from functools import partial
 from typing import Callable
 
 import cubework.module as cube_nn
+import nltk
 import torch
 from cubework.utils import get_current_device, get_dataloader, get_logger
 from datasets import load_from_disk, set_progress_bar_enabled
 from torch import dtype, nn
-from transformers import GPT2Tokenizer
+from transformers import GPT2Tokenizer, default_data_collator
 from transformers.optimization import get_linear_schedule_with_warmup
 
 
 class GPT2Embedding(nn.Module):
+
     def __init__(
         self,
         embedding_size: int,
@@ -84,11 +84,9 @@ class GPT2SelfAttention(nn.Module):
         x = torch.matmul(q, k.transpose(-1, -2))
         x = x / math.sqrt(self.attention_head_size)
         # causal mask
-        causal_mask = (
-            torch.tril(torch.ones((self.max_positions, self.max_positions), dtype=torch.uint8, device=x.device))
-            .view(1, 1, self.max_positions, self.max_positions)
-            .bool()
-        )
+        causal_mask = (torch.tril(
+            torch.ones((self.max_positions, self.max_positions), dtype=torch.uint8,
+                       device=x.device)).view(1, 1, self.max_positions, self.max_positions).bool())
         x = torch.where(causal_mask, x, torch.tensor(-1e4, dtype=x.dtype, device=x.device))
         if attention_mask is not None:
             x = x + attention_mask
@@ -108,6 +106,7 @@ class GPT2SelfAttention(nn.Module):
 
 
 class GPT2MLP(nn.Module):
+
     def __init__(
         self,
         hidden_size: int,
@@ -132,6 +131,7 @@ class GPT2MLP(nn.Module):
 
 
 class GPT2LMHead(nn.Module):
+
     def __init__(
         self,
         hidden_size: int,
@@ -155,6 +155,7 @@ class GPT2LMHead(nn.Module):
 
 
 class GPT2Block(nn.Module):
+
     def __init__(
         self,
         hidden_size: int,
@@ -218,6 +219,7 @@ class GPT2Block(nn.Module):
 
 
 class GPT2LMLoss(nn.Module):
+
     def __init__(self):
         super().__init__()
         self.loss = cube_nn.CrossEntropyLoss()
@@ -230,6 +232,7 @@ class GPT2LMLoss(nn.Module):
 
 
 class GPT2(nn.Module):
+
     def __init__(
         self,
         vocab_size: int = 50304,
@@ -258,25 +261,22 @@ class GPT2(nn.Module):
             dropout=embedding_dropout,
             dtype=dtype,
         )
-        self.blocks = nn.ModuleList(
-            [
-                GPT2Block(
-                    hidden_size=hidden_size,
-                    num_heads=num_heads,
-                    max_positions=max_position_embeddings,
-                    intermediate_size=intermediate_size,
-                    activation=activation,
-                    attention_dropout=attention_dropout,
-                    dropout=dropout,
-                    layernorm_epsilon=layernorm_epsilon,
-                    dtype=dtype,
-                    bias=bias,
-                    apply_post_layernorm=apply_post_layernorm,
-                    checkpoint=checkpoint,
-                )
-                for _ in range(depth)
-            ]
-        )
+        self.blocks = nn.ModuleList([
+            GPT2Block(
+                hidden_size=hidden_size,
+                num_heads=num_heads,
+                max_positions=max_position_embeddings,
+                intermediate_size=intermediate_size,
+                activation=activation,
+                attention_dropout=attention_dropout,
+                dropout=dropout,
+                layernorm_epsilon=layernorm_epsilon,
+                dtype=dtype,
+                bias=bias,
+                apply_post_layernorm=apply_post_layernorm,
+                checkpoint=checkpoint,
+            ) for _ in range(depth)
+        ])
 
         self.norm = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon, dtype=dtype)
 
@@ -299,7 +299,7 @@ class GPT2(nn.Module):
             attention_mask = attention_mask.view(batch_size, -1)
             attention_mask = cube_nn.partition_batch(attention_mask)
             attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-            attention_mask = attention_mask.to(dtype=x.dtype)  # fp16 compatibility
+            attention_mask = attention_mask.to(dtype=x.dtype)    # fp16 compatibility
             attention_mask = (1.0 - attention_mask) * -10000.0
 
         for block in self.blocks:
@@ -399,80 +399,99 @@ def gpt2_40b(checkpoint=True):
 
 
 def build_model(args):
+    logger = get_logger()
     model_func = globals()[args.model_name]
-    return model_func(checkpoint=args.use_activation_checkpoint)
-
-
-def _tokenize(examples, tokenizer):
-    tokenizer.pad_token = tokenizer.unk_token
-    examples = list(map(lambda x: x["text"], examples))
-    result = tokenizer(examples, padding="max_length", truncation=True, max_length=1024, return_tensors="pt")
-    result["labels"] = copy.deepcopy(result["input_ids"])
-    return result
+    model = model_func(max_position_embeddings=args.seq_length, checkpoint=args.use_activation_checkpoint)
+    logger.info("Model is built.")
+    return model
 
 
 def build_data(args):
+    logger = get_logger()
     set_progress_bar_enabled(False)
     dataset = load_from_disk(args.dataset_path)
-    tokenizer = GPT2Tokenizer(
-        vocab_file=args.tokenizer_path + "/vocab.json", merges_file=args.tokenizer_path + "/merges.txt"
-    )
+    dataset = dataset['train'].train_test_split(train_size=0.9, test_size=0.1, shuffle=False)
+    logger.info(f"Raw dataset:\n{dataset}")
+    tokenizer = GPT2Tokenizer(vocab_file=args.tokenizer_path + "/vocab.json",
+                              merges_file=args.tokenizer_path + "/merges.txt")
+    splitter = nltk.load("tokenizers/punkt/english.pickle")
 
-    train_data = get_dataloader(
-        dataset=dataset["train"],
-        shuffle=True,
-        batch_size=args.batch_size,
-        drop_last=True,
-        collate_fn=partial(_tokenize, tokenizer=tokenizer),
-        num_workers=1,
-        pin_memory=True,
-    )
-    test_data = get_dataloader(
-        dataset=dataset["validation"],
-        batch_size=args.batch_size,
-        collate_fn=partial(_tokenize, tokenizer=tokenizer),
-        num_workers=1,
-        pin_memory=True,
-    )
+    def _tokenize(examples):
+        tokenizer.pad_token = tokenizer.unk_token
+        sentences = []
+        for document in examples['text']:
+            for sentence in splitter.tokenize(document):
+                sentences.append(sentence)
+        result = tokenizer(sentences,
+                           padding='max_length',
+                           truncation=True,
+                           max_length=args.seq_length,
+                           return_tensors='np')
+        return result
+
+    remove_keys = list(dataset['train'][0].keys())
+    logger.info("Tokenizing data ...")
+    tokenized_dataset = dataset.map(_tokenize,
+                                    batched=True,
+                                    num_proc=16,
+                                    keep_in_memory=True,
+                                    remove_columns=remove_keys)
+    logger.info(f"Tokenized dataset:\n{tokenized_dataset}")
+
+    train_data = get_dataloader(dataset=tokenized_dataset["train"],
+                                shuffle=True,
+                                batch_size=args.batch_size,
+                                drop_last=True,
+                                collate_fn=default_data_collator,
+                                num_workers=4,
+                                pin_memory=True)
+    test_data = get_dataloader(dataset=tokenized_dataset["test"],
+                               batch_size=args.batch_size,
+                               collate_fn=default_data_collator,
+                               num_workers=4,
+                               pin_memory=True)
+    logger.info("Train and test data are built.")
 
     return train_data, test_data
 
 
-def build_criterion(args):
-    return GPT2LMLoss(), cube_nn.Perplexity()
+def build_criterion():
+    logger = get_logger()
+    criterion = GPT2LMLoss()
+    metric = cube_nn.Perplexity()
+    logger.info("Loss and metric function are built.")
+    return criterion, metric
 
 
 def build_optimizer(args, params):
+    logger = get_logger()
     optimizer = torch.optim.AdamW(params, lr=args.learning_rate, weight_decay=args.weight_decay)
+    logger.info("Optimizer is built.")
     return optimizer
 
 
 def build_scheduler(args, n_steps, optimizer):
+    logger = get_logger()
     max_steps = n_steps * args.num_epochs
     warmup_steps = n_steps * args.warmup_epochs
-    lr_scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=warmup_steps, num_training_steps=max_steps
-    )
+    lr_scheduler = get_linear_schedule_with_warmup(optimizer,
+                                                   num_warmup_steps=warmup_steps,
+                                                   num_training_steps=max_steps)
+    logger.info("Learning rate scheduler is built.")
     return lr_scheduler
 
 
 def build_gpt2(args):
-    logger = get_logger()
-
     model = build_model(args)
-    logger.info("Model is built.")
 
     train_data, test_data = build_data(args)
-    logger.info("Train and test data are built.")
 
-    criterion, metric = build_criterion(args)
-    logger.info("Loss and metric function are built.")
+    criterion, metric = build_criterion()
 
     optimizer = build_optimizer(args, model.parameters())
     n_steps = len(train_data)
     if args.steps_per_epoch is not None and args.steps_per_epoch < n_steps:
         n_steps = args.steps_per_epoch
     lr_scheduler = build_scheduler(args, n_steps, optimizer)
-    logger.info("Optimizer and learning rate scheduler are built.")
 
     return model, train_data, test_data, criterion, metric, optimizer, lr_scheduler
