@@ -8,37 +8,13 @@ from torch import dtype, nn
 
 from . import init as init
 from ._entry_module import CubeModule
-from .module_std import ClassifierSTD, PatchEmbeddingSTD
-from .parallel_1d import (
-    Classifier1D,
-    Dropout1D,
-    Embedding1D,
-    LayerNorm1D,
-    Linear1D,
-    PatchEmbedding1D,
-    VocabParallelClassifier1D,
-    VocabParallelEmbedding1D,
-)
-from .parallel_2d import (
-    Classifier2D,
-    Embedding2D,
-    LayerNorm2D,
-    Linear2D,
-    PatchEmbedding2D,
-    VocabParallelClassifier2D,
-    VocabParallelEmbedding2D,
-    split_batch_2d,
-)
-from .parallel_3d import (
-    Classifier3D,
-    Embedding3D,
-    LayerNorm3D,
-    Linear3D,
-    PatchEmbedding3D,
-    VocabParallelClassifier3D,
-    VocabParallelEmbedding3D,
-    split_batch_3d,
-)
+from .module_std import ClassifierSTD, DropPath, PatchEmbeddingSTD
+from .parallel_1d import (Classifier1D, Dropout1D, Embedding1D, LayerNorm1D, Linear1D, PatchEmbedding1D,
+                          VocabParallelClassifier1D, VocabParallelEmbedding1D)
+from .parallel_2d import (Classifier2D, Embedding2D, LayerNorm2D, Linear2D, PatchEmbedding2D, VocabParallelClassifier2D,
+                          VocabParallelEmbedding2D, split_batch_2d)
+from .parallel_3d import (Classifier3D, Embedding3D, LayerNorm3D, Linear3D, PatchEmbedding3D, VocabParallelClassifier3D,
+                          VocabParallelEmbedding3D, split_batch_3d)
 from .utils import get_tensor_parallel_mode
 
 _parallel_layernorm = {

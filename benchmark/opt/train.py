@@ -19,13 +19,7 @@ from cubework.module import synchronize
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 
-from gpt2 import build_gpt2
-from vit import build_vit
-
-_builder = {
-    "gpt2": build_gpt2,
-    "vit": build_vit,
-}
+from opt import build_opt
 
 mem_tracker = None
 comm_profiler = None
@@ -40,20 +34,13 @@ scaler = None
 lr_scheduler = None
 
 numel = None
+model_mem = None
 
 
-def _data_parallel_sum(tensor):
-    out = tensor
-    if pm.DATA.world_size > 1:
-        out = all_reduce(out, pm.DATA)
-    return out
-
-
-def _data_parallel_mean(tensor):
-    out = tensor
-    if pm.DATA.world_size > 1:
-        out = all_reduce(out, pm.DATA) / pm.DATA.world_size
-    return out
+def aggregate_ddp_results(*vals):
+    tensor = torch.as_tensor(vals, device=get_current_device())
+    all_reduce(tensor, pm.DATA)
+    return tuple(tensor.tolist())
 
 
 def _move_to_cuda(x):
@@ -93,18 +80,24 @@ def _train(epoch, args):
     if mem_tracker is not None:
         mem_tracker.start()
 
+    past_key_values = None
     for i in progress:
         fwd_start = time.time()
 
         batch = _move_to_cuda(next(data_iter))
 
         labels = batch.pop("labels")
+        if args.use_cache:
+            batch['past_key_values'] = past_key_values
 
         if args.use_mixed_precision:
             with torch.cuda.amp.autocast():
                 outputs = model(**batch)
         else:
             outputs = model(**batch)
+        if args.use_cache:
+            past_key_values = outputs[1]
+        outputs = outputs[0]
 
         batch_size = outputs.size(0)
         batch_tokens = outputs.size(0) * outputs.size(1)
@@ -121,7 +114,7 @@ def _train(epoch, args):
         else:
             loss.backward()
 
-        synchronize()
+        synchronize(model.parameters())
 
         if (i + 1) % args.gradient_accumulation or i + 1 == num_steps:
             if scaler is not None:
@@ -176,27 +169,27 @@ def _train(epoch, args):
     if comm_profiler is not None:
         comm_cnt, comm_vol, comm_time = comm_profiler.stop()
 
-    total_loss = _data_parallel_mean(total_loss)
-    total_samples = _data_parallel_sum(total_samples)
-    total_tokens = _data_parallel_sum(total_tokens)
+    total_loss, total_samples, total_tokens = aggregate_ddp_results(total_loss, total_samples, total_tokens)
 
-    msg = f"[Epoch {epoch} / Train]: Loss = {total_loss.item() / total_steps:.3f}"
+    msg = f"[Epoch {epoch} / Train]: Loss = {total_loss / total_steps:.3f}"
     msg += f" | Step time = {total_time / total_steps:.3f} s"
-    msg += f" | Throughput = {total_samples.item() / total_time:.3f} samples/sec"
-    tflops = calc_tflops(
-        numel, total_tokens.item(), total_time, with_backward=True, checkpoint=args.use_activation_checkpoint
-    )
+    msg += f" | Throughput = {total_samples / total_time:.3f} samples/sec"
+    tflops = calc_tflops(numel, total_tokens, total_time, with_backward=True, checkpoint=args.use_activation_checkpoint)
     msg += f" | TFLOPS = {tflops:.3f}"
+
     if mem_tracker is not None:
-        msg += f" | Peak memory = {peak_mem / 1024:.3f} GB"
+        msg += f"\n[Epoch {epoch} / Train]: Peak memory = {peak_mem / 1024:.3f} GB"
+        state_mem = torch.cuda.memory_allocated() - model_mem
+        msg += f" | Gradients & optimizer states memory = {state_mem / 1024**3:.3f} GB."
+        activation_mem = peak_mem - state_mem - model_mem
+        msg += f" | Activation memory = {activation_mem / 1024**3:.3f} GB."
+
     if comm_profiler is not None:
         msg += f"\n[Epoch {epoch} / Train]: Communication total time = {comm_time:.3f} s, # ops = {comm_cnt:.5g}"
         if comm_time > 0:
-            msg += (
-                f", avg step time = {comm_time / total_steps:.3f} s"
-                + f", ratio = {comm_time * 100 / total_time:.3f} %"
-                + f", avg bandwidth = {comm_vol / (comm_time * 1024**3):.3f} GB/s"
-            )
+            msg += (f", avg step time = {comm_time / total_steps:.3f} s" +
+                    f", ratio = {comm_time * 100 / total_time:.3f} %" +
+                    f", avg bandwidth = {comm_vol / (comm_time * 1024**3):.3f} GB/s")
     logger.info(msg)
 
 
@@ -229,6 +222,7 @@ def _test(epoch, args):
     if mem_tracker is not None:
         mem_tracker.start()
 
+    past_key_values = None
     with torch.no_grad():
         for _ in progress:
             batch_start = time.time()
@@ -236,12 +230,17 @@ def _test(epoch, args):
             batch = _move_to_cuda(next(data_iter))
 
             labels = batch.pop("labels")
+            if args.use_cache:
+                batch['past_key_values'] = past_key_values
 
             if args.use_mixed_precision:
                 with torch.cuda.amp.autocast():
                     outputs = model(**batch)
             else:
                 outputs = model(**batch)
+            if args.use_cache:
+                past_key_values = outputs[1]
+            outputs = outputs[0]
 
             batch_size = outputs.size(0)
             batch_tokens = outputs.size(0) * outputs.size(1)
@@ -284,17 +283,13 @@ def _test(epoch, args):
     if comm_profiler is not None:
         _, comm_vol, comm_time = comm_profiler.stop()
 
-    total_loss = _data_parallel_mean(total_loss)
-    total_samples = _data_parallel_sum(total_samples)
-    total_tokens = _data_parallel_sum(total_tokens)
+    total_loss, total_samples, total_tokens = aggregate_ddp_results(total_loss, total_samples, total_tokens)
 
-    msg = f"[Epoch {epoch} / Test]: Loss = {total_loss.item() / total_steps:.3f}"
+    msg = f"[Epoch {epoch} / Test]: Loss = {total_loss / total_steps:.3f}"
     msg += f" | {metric.name} = {metric.to_str()}"
     msg += f" | Step time = {total_time / total_steps:.3f} s"
-    msg += f" | Throughput = {total_samples.item() / total_time:.3f} samples/sec"
-    tflops = calc_tflops(
-        numel, total_tokens.item(), total_time, with_backward=True, checkpoint=args.use_activation_checkpoint
-    )
+    msg += f" | Throughput = {total_samples / total_time:.3f} samples/sec"
+    tflops = calc_tflops(numel, total_tokens, total_time, with_backward=True, checkpoint=args.use_activation_checkpoint)
     msg += f" | TFLOPS = {tflops:.3f}"
 
     if mem_tracker is not None:
@@ -303,11 +298,9 @@ def _test(epoch, args):
     if comm_profiler is not None:
         msg += f"\n[Epoch {epoch} / Test]: Communication total time = {comm_time:.3f} s"
         if comm_time > 0:
-            msg += (
-                f", avg step time = {comm_time / total_steps:.3f} s"
-                + f", ratio = {comm_time * 100 / total_time:.3f} %"
-                + f", avg bandwidth = {comm_vol / (comm_time * 1024**3):.3f} GB/s"
-            )
+            msg += (f", avg step time = {comm_time / total_steps:.3f} s" +
+                    f", ratio = {comm_time * 100 / total_time:.3f} %" +
+                    f", avg bandwidth = {comm_vol / (comm_time * 1024**3):.3f} GB/s")
 
     logger.info(msg)
 
@@ -315,10 +308,10 @@ def _test(epoch, args):
 def get_parser():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--model_name", "--m", type=str)
-    parser.add_argument("--seq_length", "--s", type=int)
+    parser.add_argument("--model_name", "-m", type=str)
+    parser.add_argument("--seq_length", "-s", type=int)
     parser.add_argument("--dataset_path", "--data", type=str)
-    parser.add_argument("--tokenizer_path", "--token", type=str)
+    parser.add_argument("--tokenizer_path", "--tok", type=str)
 
     parser.add_argument("--batch_size", "--bs", type=int)
     parser.add_argument("--num_epochs", "--n_epoch", type=int)
@@ -331,6 +324,7 @@ def get_parser():
     parser.add_argument("--validation_interval", "--n_eval", type=int, default=1)
 
     parser.add_argument("--use_activation_checkpoint", "--ckpt", action="store_true", default=False)
+    parser.add_argument("--use_cache", "--cache", action="store_true", default=False)
 
     parser.add_argument("--gradient_clipping", "--clip", type=float, default=0.0)
 
@@ -358,13 +352,11 @@ def train():
     if args.log_file is not None:
         write_logger_to_file(args.log_file)
 
-    model_type = args.model_name.split("_")[0]
-    assert model_type in ["gpt2", "vit"], f"No support for {args.model_name}."
-
     global model, train_data, test_data, criterion, metric, optimizer, lr_scheduler
-    model, train_data, test_data, criterion, metric, optimizer, lr_scheduler = _builder[model_type](args)
+    model, train_data, test_data, criterion, metric, optimizer, lr_scheduler = build_opt(args)
 
-    model = DDP(model, process_group=pm.DATA.group)
+    if pm.DATA.world_size > 1:
+        model = DDP(model, process_group=pm.DATA.group)
 
     global scaler
     if args.use_mixed_precision:
@@ -390,7 +382,8 @@ def train():
         msg = f"{numel / 1e6:.3f} M"
     else:
         msg = f"{numel / 1e9:.3f} B"
-    model_mem = torch.cuda.max_memory_allocated(get_current_device())
+    global model_mem
+    model_mem = torch.cuda.max_memory_allocated()
     logger.info(f"Parameter size = {msg} | Model memory = {model_mem / 1024**3:.3f} GB.")
 
     logger.info("Benchmark start.")
@@ -400,9 +393,6 @@ def train():
         if args.do_validation:
             if (epoch + 1) % args.validation_interval == 0 or epoch + 1 == args.num_epochs:
                 _test(epoch, args)
-
-    state_mem = torch.cuda.memory_allocated(get_current_device()) - model_mem
-    logger.info(f"Gradients & optimizer states memory = {state_mem / 1024**3:.3f} GB.")
 
     logger.info("Benchmark complete.")
     cubework.destroy_distributed()

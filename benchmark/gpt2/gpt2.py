@@ -208,7 +208,7 @@ class GPT2Block(nn.Module):
         return x
 
     def forward(self, x, attention_mask=None):
-        if self.checkpoint:
+        if self.checkpoint and self.training:
             return torch.utils.checkpoint.checkpoint(self._forward, x, attention_mask)
         else:
             return self._forward(x, attention_mask)

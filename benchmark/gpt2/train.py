@@ -168,18 +168,14 @@ def _train(epoch, args):
     msg = f"[Epoch {epoch} / Train]: Loss = {total_loss / total_steps:.3f}"
     msg += f" | Step time = {total_time / total_steps:.3f} s"
     msg += f" | Throughput = {total_samples / total_time:.3f} samples/sec"
-    tflops = calc_tflops(numel,
-                         total_tokens,
-                         total_time,
-                         with_backward=True,
-                         checkpoint=args.use_activation_checkpoint)
+    tflops = calc_tflops(numel, total_tokens, total_time, with_backward=True, checkpoint=args.use_activation_checkpoint)
     msg += f" | TFLOPS = {tflops:.3f}"
 
     if mem_tracker is not None:
         msg += f"\n[Epoch {epoch} / Train]: Peak memory = {peak_mem / 1024:.3f} GB"
         state_mem = torch.cuda.memory_allocated() - model_mem
         msg += f" | Gradients & optimizer states memory = {state_mem / 1024**3:.3f} GB."
-        activation_mem = peak_mem - state_mem - model_mem
+        activation_mem = peak_mem * (1024**2) - state_mem - model_mem
         msg += f" | Activation memory = {activation_mem / 1024**3:.3f} GB."
 
     if comm_profiler is not None:
@@ -281,11 +277,7 @@ def _test(epoch, args):
     msg += f" | {metric.name} = {metric.to_str()}"
     msg += f" | Step time = {total_time / total_steps:.3f} s"
     msg += f" | Throughput = {total_samples / total_time:.3f} samples/sec"
-    tflops = calc_tflops(numel,
-                         total_tokens,
-                         total_time,
-                         with_backward=True,
-                         checkpoint=args.use_activation_checkpoint)
+    tflops = calc_tflops(numel, total_tokens, total_time, with_backward=True, checkpoint=args.use_activation_checkpoint)
     msg += f" | TFLOPS = {tflops:.3f}"
 
     if mem_tracker is not None:

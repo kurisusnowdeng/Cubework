@@ -2,16 +2,19 @@ FROM cr-cn-beijing.volces.com/hpcaitech/zbian-dev:latest
 
 WORKDIR /workspace
 
-# RUN cd ./ColossalAI && git remote set-url origin https://github.com/kurisusnowdeng/ColossalAI.git && \
-#     git fetch --all && git checkout main && git reset --hard origin/main
-
-# RUN git clone https://github.com/kurisusnowdeng/Cubework.git && cd ./Cubework && \
-#     pip install --upgrade --verbose --no-cache-dir -e .
-
-# RUN git clone https://github.com/hpcaitech/HyaDIS.git && cd ./HyaDIS && git checkout dev &&\
-#     pip install --upgrade --verbose --no-cache-dir -e .
+RUN sed -i '$d' ~/.bashrc && \
+    sed -i '$d' ~/.bashrc && \
+    sed -i '$d' ~/.bashrc && \
+    sed -i '$d' ~/.bashrc && \
+    sed -i '$d' ~/.bashrc && \
+    sed -i '$d' ~/.bashrc
 
 RUN echo 'alias cdp="cd /nas/code/zbian"' >> ~/.bashrc && \
-    echo 'alias cds="cd /nas/data"' >> ~/.bashrc
+    echo 'alias cds="cd /nas/data"' >> ~/.bashrc && \
+    echo 'alias proxy-start="export http_proxy=http://100.68.174.164:3128 https_proxy=http://100.68.174.164:3128"'  >> ~/.bashrc && \
+    echo 'alias proxy-stop="unset http_proxy https_proxy"' >> ~/.bashrc && \
+    echo 'export proxy_addr=http://100.68.174.164:3128'
 
-RUN pip install --upgrade --no-cache-dir datasets==1.18.4
+RUN apt-get update && apt-get install -y htop tmux
+
+RUN git config --global http.proxy http://100.68.174.164:3128 && git config --global https.proxy http://100.68.174.164:3128
