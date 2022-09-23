@@ -2,7 +2,7 @@ import math
 from typing import Callable
 
 from cubework.distributed import ParallelManager as pm
-from cubework.global_vars import VOCAB_PARALLEL
+from cubework.global_vars import VOCAB_PARALLEL, env
 from cubework.utils import get_current_device, seed
 from torch import dtype, nn
 
@@ -126,12 +126,11 @@ class Classifier(CubeModule):
                  num_classes: int,
                  weight: nn.Parameter = None,
                  bias: bool = True,
-                 vocab_parallel: bool = False,
                  dtype: dtype = None,
                  weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
                  bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1)):
         tensor_parallel = get_tensor_parallel_mode()
-        vocab_parallel = getattr(weight, VOCAB_PARALLEL, vocab_parallel)
+        vocab_parallel = env.vocab_parallel
         if vocab_parallel:
             layer = _vocab_parallel_classifier[tensor_parallel](
                 in_features,
