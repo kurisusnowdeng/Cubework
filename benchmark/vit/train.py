@@ -157,7 +157,7 @@ def _train(epoch, args):
                 batch_tokens * pm.DATA.world_size,
                 batch_time,
                 with_backward=True,
-                checkpoint=args.use_activation_checkpoint,
+                use_checkpoint=args.use_activation_checkpoint,
             )
             progress.set_postfix(
                 loss=loss.item(),
@@ -183,20 +183,20 @@ def _train(epoch, args):
     msg = f"[Epoch {epoch} / Train]: Loss = {total_loss.item() / total_steps:.3f}"
     msg += f" | Step time = {total_time / total_steps:.3f} s"
     msg += f" | Throughput = {total_samples.item() / total_time:.3f} samples/sec"
-    tflops = calc_tflops(
-        numel, total_tokens.item(), total_time, with_backward=True, checkpoint=args.use_activation_checkpoint
-    )
+    tflops = calc_tflops(numel,
+                         total_tokens.item(),
+                         total_time,
+                         with_backward=True,
+                         use_checkpoint=args.use_activation_checkpoint)
     msg += f" | TFLOPS = {tflops:.3f}"
     if mem_tracker is not None:
         msg += f" | Peak memory = {peak_mem / 1024:.3f} GB"
     if comm_profiler is not None:
         msg += f"\n[Epoch {epoch} / Train]: Communication total time = {comm_time:.3f} s, # ops = {comm_cnt:.5g}"
         if comm_time > 0:
-            msg += (
-                f", avg step time = {comm_time / total_steps:.3f} s"
-                + f", ratio = {comm_time * 100 / total_time:.3f} %"
-                + f", avg bandwidth = {comm_vol / (comm_time * 1024**3):.3f} GB/s"
-            )
+            msg += (f", avg step time = {comm_time / total_steps:.3f} s" +
+                    f", ratio = {comm_time * 100 / total_time:.3f} %" +
+                    f", avg bandwidth = {comm_vol / (comm_time * 1024**3):.3f} GB/s")
     logger.info(msg)
 
 
@@ -265,7 +265,7 @@ def _test(epoch, args):
                     batch_tokens * pm.DATA.world_size,
                     batch_time,
                     with_backward=False,
-                    checkpoint=False,
+                    use_checkpoint=False,
                 )
                 metrics = dict(
                     loss=loss.item(),
@@ -292,9 +292,11 @@ def _test(epoch, args):
     msg += f" | {metric.name} = {metric.to_str()}"
     msg += f" | Step time = {total_time / total_steps:.3f} s"
     msg += f" | Throughput = {total_samples.item() / total_time:.3f} samples/sec"
-    tflops = calc_tflops(
-        numel, total_tokens.item(), total_time, with_backward=True, checkpoint=args.use_activation_checkpoint
-    )
+    tflops = calc_tflops(numel,
+                         total_tokens.item(),
+                         total_time,
+                         with_backward=True,
+                         use_checkpoint=args.use_activation_checkpoint)
     msg += f" | TFLOPS = {tflops:.3f}"
 
     if mem_tracker is not None:
@@ -303,11 +305,9 @@ def _test(epoch, args):
     if comm_profiler is not None:
         msg += f"\n[Epoch {epoch} / Test]: Communication total time = {comm_time:.3f} s"
         if comm_time > 0:
-            msg += (
-                f", avg step time = {comm_time / total_steps:.3f} s"
-                + f", ratio = {comm_time * 100 / total_time:.3f} %"
-                + f", avg bandwidth = {comm_vol / (comm_time * 1024**3):.3f} GB/s"
-            )
+            msg += (f", avg step time = {comm_time / total_steps:.3f} s" +
+                    f", ratio = {comm_time * 100 / total_time:.3f} %" +
+                    f", avg bandwidth = {comm_vol / (comm_time * 1024**3):.3f} GB/s")
 
     logger.info(msg)
 

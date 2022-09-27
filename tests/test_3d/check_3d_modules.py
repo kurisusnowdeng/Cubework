@@ -1,7 +1,6 @@
 import time
 
 import torch
-from cubework.module import synchronize
 from cubework.module.loss.loss_3d import CrossEntropyLoss3D, VocabParallelCrossEntropyLoss3D
 from cubework.module.module_std import ClassifierSTD, PatchEmbeddingSTD
 from cubework.module.parallel_3d import (Classifier3D, Embedding3D, LayerNorm3D, Linear3D, PatchEmbedding3D,
@@ -48,7 +47,7 @@ def check_linear():
     layer_master = torch.nn.Linear(INPUT_SIZE, OUTPUT_SIZE)
     layer_master = layer_master.to(device)
 
-    weight_master = layer_master.weight.data.transpose(0, 1)
+    weight_master = layer_master.weight.data.transpose(0, 1).contiguous()
     torch.distributed.broadcast(weight_master, src=0)
     weight = torch.chunk(weight_master, DEPTH, dim=0)[k]
     weight = torch.chunk(weight, DEPTH, dim=-1)[j]
@@ -90,7 +89,6 @@ def check_linear():
 
     bwd_start = time.time()
     out.backward(grad)
-    synchronize(layer.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("linear backward: {:.3f} s".format(bwd_end - bwd_start))
@@ -178,7 +176,6 @@ def check_layernorm():
 
     bwd_start = time.time()
     out.backward(grad)
-    synchronize(norm.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("layer norm backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -246,7 +243,7 @@ def check_classifier_no_given_weight():
     fwd_end = time.time()
     logger.info(
         "classifier (no given weight) forward: pass | {0} --> {1} | {2:.3f} s".format(
-            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start),)
+            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start), )
     A_master = A_master.clone()
     A_master.requires_grad = True
     C_master = layer_master(A_master)
@@ -263,7 +260,6 @@ def check_classifier_no_given_weight():
 
     bwd_start = time.time()
     out.backward(grad)
-    synchronize(layer.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("classifier (no given weight) backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -341,7 +337,7 @@ def check_vocab_parallel_classifier_no_given_weight():
     fwd_end = time.time()
     logger.info(
         "vocab parallel classifier (no given weight) forward: pass | {0} --> {1} | {2:.3f} s".format(
-            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start),)
+            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start), )
     A_master = A_master.clone()
     A_master.requires_grad = True
     C_master = layer_master(A_master)
@@ -360,7 +356,6 @@ def check_vocab_parallel_classifier_no_given_weight():
 
     bwd_start = time.time()
     out.backward(grad)
-    synchronize(layer.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("vocab parallel classifier (no given weight) backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -434,7 +429,7 @@ def check_vocab_parallel_classifier_given_embed_weight():
     fwd_end = time.time()
     logger.info(
         "vocab parallel classifier (given embed weight) forward: pass | {0} --> {1} | {2:.3f} s".format(
-            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start),)
+            tuple(A.shape), tuple(out.shape), fwd_end - fwd_start), )
     A_master = A_master.clone()
     C_master = layer_master(embed_master(A_master))
     C = torch.chunk(C_master, DEPTH, dim=0)[i]
@@ -452,8 +447,6 @@ def check_vocab_parallel_classifier_given_embed_weight():
 
     bwd_start = time.time()
     out.backward(grad)
-    synchronize(layer.parameters())
-    synchronize(embed.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("vocab parallel classifier (given embed weight) backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -516,7 +509,7 @@ def check_patch_embed():
     fwd_end = time.time()
     logger.info(
         "patch embed forward: pass | {0} --> {1} | {2:.3f} s".format(tuple(A.shape), tuple(out.shape),
-                                                                     fwd_end - fwd_start),)
+                                                                     fwd_end - fwd_start), )
 
     A_master = A_master.clone()
     C_master = layer_master(A_master)
@@ -535,7 +528,6 @@ def check_patch_embed():
 
     bwd_start = time.time()
     out.backward(grad)
-    synchronize(layer.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("patch embed backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -618,7 +610,6 @@ def check_embed():
     grad = grad.clone()
     bwd_start = time.time()
     out.backward(grad)
-    synchronize(layer.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("embed backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -688,7 +679,6 @@ def check_vocab_parallel_embed():
     grad = grad.clone()
     bwd_start = time.time()
     out.backward(grad)
-    synchronize(layer.parameters())
     torch.cuda.synchronize()
     bwd_end = time.time()
     logger.info("vocab parallel embed backward: pass | {:.3f} s".format(bwd_end - bwd_start))
@@ -725,7 +715,7 @@ def check_loss():
 
     out_shape = (BATCH_SIZE, NUM_CLASSES)
     out_master = torch.randn(out_shape, dtype=dtype, device=device)
-    target_master = torch.randint(NUM_CLASSES, (BATCH_SIZE,), dtype=torch.long, device=device)
+    target_master = torch.randint(NUM_CLASSES, (BATCH_SIZE, ), dtype=torch.long, device=device)
     torch.distributed.broadcast(out_master, src=0)
     torch.distributed.broadcast(target_master, src=0)
     out = torch.chunk(out_master, DEPTH, dim=0)[i]
@@ -778,7 +768,7 @@ def check_vocab_parallel_loss():
 
     out_shape = (BATCH_SIZE, NUM_CLASSES)
     out_master = torch.randn(out_shape, dtype=dtype, device=device)
-    target_master = torch.randint(NUM_CLASSES, (BATCH_SIZE,), dtype=torch.long, device=device)
+    target_master = torch.randint(NUM_CLASSES, (BATCH_SIZE, ), dtype=torch.long, device=device)
     torch.distributed.broadcast(out_master, src=0)
     torch.distributed.broadcast(target_master, src=0)
     out = torch.chunk(out_master, DEPTH, dim=0)[i]

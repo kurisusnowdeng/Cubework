@@ -27,11 +27,11 @@ def calc_model_size(model: torch.nn.Module):
     return numel, numel_per_device
 
 
-def calc_tflops(numel: int, num_tokens: int, iter_time: float, with_backward=True, checkpoint=False) -> float:
+def calc_tflops(numel: int, num_tokens: int, iter_time: float, with_backward=True, use_checkpoint=False) -> float:
     flops = numel * num_tokens * 2
     multiple = 1
     if with_backward:
         multiple += 2
-    if checkpoint:
+    if use_checkpoint:
         multiple += 1
     return (flops * multiple / (1e12 * pm.GLOBAL.world_size)) / (iter_time + 1e-12)

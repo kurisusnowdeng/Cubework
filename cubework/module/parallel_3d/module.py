@@ -12,7 +12,7 @@ from torch import Tensor
 from torch.nn import Parameter
 
 from .. import init
-from ..utils import set_tensor_parallel_attribute_by_partition, split_tensor, to_2tuple
+from ..utils import register_async_grad_hook, set_tensor_parallel_attribute_by_partition, split_tensor, to_2tuple
 from ._operation import classifier_3d, layernorm_3d, linear_3d, vocab_parallel_classifier_3d
 from ._utils import (all_gather_weight_3d, get_depth_from_env, get_input_parallel_mode,
                      get_input_x_weight_parallel_mode, get_output_parallel_mode, get_output_x_weight_parallel_mode,
@@ -37,6 +37,7 @@ class LayerNorm3D(nn.Module):
         self.bias = Parameter(torch.zeros(self.normalized_shape_per_partition, device=get_current_device(),
                                           dtype=dtype))
         self.variance_epsilon = eps
+        self.reset_parameters()
         self._set_tensor_parallel_attributes()
 
     def _set_tensor_parallel_attributes(self) -> None:
@@ -46,6 +47,8 @@ class LayerNorm3D(nn.Module):
     def reset_parameters(self) -> None:
         init.zeros_()(self.bias)
         init.ones_()(self.weight)
+        register_async_grad_hook(self.weight)
+        register_async_grad_hook(self.bias)
 
     def forward(self, input_: Tensor) -> Tensor:
         return layernorm_3d(
@@ -111,11 +114,13 @@ class Linear3D(nn.Module):
             fan_in, fan_out = self.in_features, self.out_features
 
             weight_initializer(self.weight, fan_in=fan_in, fan_out=fan_out)
+            register_async_grad_hook(self.weight)
 
             if self.bias is not None:
                 bias_initializer(self.bias, fan_in=fan_in)
                 broadcast(self.bias, self.output_x_weight_parallel_mode.rank_by_idx(0),
                           self.output_x_weight_parallel_mode)
+                register_async_grad_hook(self.bias)
 
     def forward(self, input_: Tensor) -> Tensor:
         return linear_3d(
@@ -176,9 +181,12 @@ class Classifier3D(nn.Module):
                 weight_initializer(self.weight, fan_in=fan_in, fan_out=fan_out)
                 broadcast(self.weight, self.weight_parallel_mode.rank_by_idx(0), self.weight_parallel_mode)
 
+            register_async_grad_hook(self.weight)
+
             if self.bias is not None:
                 bias_initializer(self.bias, fan_in=fan_in)
                 broadcast(self.bias, pm.TENSOR.rank_by_idx(0), pm.TENSOR)
+                register_async_grad_hook(self.bias)
 
     def forward(self, input_: Tensor) -> Tensor:
         return classifier_3d(
@@ -249,10 +257,13 @@ class VocabParallelClassifier3D(nn.Module):
             if self.has_weight:
                 weight_initializer(self.weight, fan_in=fan_in, fan_out=fan_out)
 
+            register_async_grad_hook(self.weight)
+
             if self.bias is not None:
                 bias_initializer(self.bias, fan_in=fan_in)
                 broadcast(self.bias, self.output_x_weight_parallel_mode.rank_by_idx(0),
                           self.output_x_weight_parallel_mode)
+                register_async_grad_hook(self.bias)
 
     def forward(self, input_: Tensor) -> Tensor:
         return vocab_parallel_classifier_3d(
@@ -339,7 +350,7 @@ class PatchEmbedding3D(nn.Module):
                                 weight_parallel_mode=self.weight_parallel_mode)
         output = F.conv2d(input_, self.weight, self.bias, stride=self.patch_size)
         if self.flatten:
-            output = output.flatten(2).transpose(1, 2)    # BCHW -> BNC
+            output = output.flatten(2).transpose(1, 2)  # BCHW -> BNC
 
         cls_token = self.cls_token.expand(output.shape[0], -1, -1)
         output = torch.cat((cls_token, output), dim=1)

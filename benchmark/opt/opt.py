@@ -1,12 +1,14 @@
 import random
+from functools import partial
 from typing import Callable, List, Optional, Tuple
 
 import cubework.module as cube_nn
-from functools import partial
 import torch
+from cubework.distributed import ParallelManager as pm
 from cubework.utils import get_dataloader, get_logger
 from datasets import load_from_disk
 from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import GPT2Tokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 
@@ -129,7 +131,7 @@ class OPTAttention(nn.Module):
             attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
         if layer_head_mask is not None:
-            if layer_head_mask.size() != (num_heads,):
+            if layer_head_mask.size() != (num_heads, ):
                 raise ValueError(f"Head mask for a single layer should be of size {(num_heads,)}, but is"
                                  f" {layer_head_mask.size()}")
             attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, num_heads, tgt_len, src_len)
@@ -242,13 +244,13 @@ class OPTDecoderLayer(nn.Module):
         if self.gradient_checkpointing and self.training:
             hidden_states, _ = torch.utils.checkpoint.checkpoint(self._forward, hidden_states, attention_mask,
                                                                  layer_head_mask)
-            return (hidden_states,)
+            return (hidden_states, )
         else:
             hidden_states, present_key_value = self._forward(hidden_states, attention_mask, layer_head_mask,
                                                              past_key_value)
-            outputs = (hidden_states,)
+            outputs = (hidden_states, )
             if use_cache:
-                outputs += (present_key_value,)
+                outputs += (present_key_value, )
             return outputs
 
 
@@ -416,16 +418,16 @@ class OPT(nn.Module):
             hidden_states = layer_outputs[0]
 
             if use_cache:
-                next_cache += (layer_outputs[1],)
+                next_cache += (layer_outputs[1], )
 
         if self.final_layer_norm is not None:
             hidden_states = self.final_layer_norm(hidden_states)
 
         hidden_states = self.lm_head(hidden_states)
 
-        outputs = (hidden_states,)
+        outputs = (hidden_states, )
         if use_cache:
-            outputs += (next_cache,)
+            outputs += (next_cache, )
         return outputs
 
 
@@ -541,6 +543,10 @@ def build_model(args):
     logger = get_logger()
     model_func = globals()[args.model_name]
     model = model_func(max_position_embeddings=args.seq_length, checkpoint=args.use_activation_checkpoint)
+
+    if pm.DATA.world_size > 1:
+        model = DDP(model, process_group=pm.DATA.group)
+
     logger.info("Model is built.")
     return model
 
@@ -561,10 +567,13 @@ def build_data(args):
     tokenizer = GPT2Tokenizer(vocab_file=args.tokenizer_path + "/vocab.json",
                               merges_file=args.tokenizer_path + "/merges.txt")
 
+    if args.micro_batch_size is None:
+        args.micro_batch_size = args.global_batch_size // pm.DATA.world_size
+
     train_data = get_dataloader(
         dataset=dataset["train"],
         shuffle=True,
-        batch_size=args.batch_size,
+        batch_size=args.micro_batch_size,
         drop_last=True,
         collate_fn=partial(_tokenize, tokenizer=tokenizer, seq_length=args.seq_length),
         num_workers=4,
@@ -572,7 +581,7 @@ def build_data(args):
     )
     test_data = get_dataloader(
         dataset=dataset["test"],
-        batch_size=args.batch_size,
+        batch_size=args.micro_batch_size,
         collate_fn=partial(_tokenize, tokenizer=tokenizer, seq_length=args.seq_length),
         num_workers=4,
         pin_memory=True,
@@ -600,7 +609,7 @@ def build_optimizer(args, params):
 def build_scheduler(args, n_steps, optimizer):
     logger = get_logger()
     max_steps = n_steps * args.num_epochs
-    warmup_steps = n_steps * args.warmup_epochs
+    warmup_steps = min(args.warmup_steps, max_steps)
     lr_scheduler = get_linear_schedule_with_warmup(optimizer,
                                                    num_warmup_steps=warmup_steps,
                                                    num_training_steps=max_steps)
@@ -608,7 +617,7 @@ def build_scheduler(args, n_steps, optimizer):
     return lr_scheduler
 
 
-def build_opt(args):
+def build_gpt2(args):
     model = build_model(args)
 
     train_data, test_data = build_data(args)

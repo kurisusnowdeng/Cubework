@@ -4,9 +4,11 @@ from typing import Callable
 
 import cubework.module as cube_nn
 import torch
+from cubework.distributed import ParallelManager as pm
 from cubework.utils import get_current_device, get_dataloader, get_logger
 from datasets import load_from_disk
 from torch import dtype, nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import GPT2Tokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 
@@ -30,10 +32,6 @@ class GPT2Embedding(nn.Module):
                                                  dtype=dtype)
         self.position_embeddings = cube_nn.Embedding(max_position_embeddings, embedding_size, dtype=dtype)
         self.dropout = cube_nn.Dropout(dropout)
-
-    @property
-    def word_embedding_weight(self):
-        return self.word_embeddings.weight
 
     def forward(self, input_ids):
         seq_length = input_ids.size(1)
@@ -92,7 +90,7 @@ class GPT2SelfAttention(nn.Module):
 
         x = torch.matmul(x, v)
         x = x.transpose(1, 2)
-        new_context_layer_shape = x.size()[:-2] + (all_head_size,)
+        new_context_layer_shape = x.size()[:-2] + (all_head_size, )
         x = x.reshape(new_context_layer_shape)
 
         x = self.dense(x)
@@ -279,7 +277,7 @@ class GPT2(nn.Module):
         self.head = GPT2LMHead(
             hidden_size=hidden_size,
             vocab_size=vocab_size,
-            word_embeeding_weight=self.embed.word_embedding_weight,
+            word_embeeding_weight=self.embed.word_embeddings.weight,
             dtype=dtype,
         )
 
@@ -294,7 +292,7 @@ class GPT2(nn.Module):
         attention_mask = attention_mask.view(batch_size, -1)
         attention_mask = cube_nn.partition_batch(attention_mask)
         attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-        attention_mask = attention_mask.to(dtype=x.dtype)    # fp16 compatibility
+        attention_mask = attention_mask.to(dtype=x.dtype)  # fp16 compatibility
         attention_mask = (1.0 - attention_mask) * -10000.0
 
         for block in self.blocks:
@@ -405,6 +403,10 @@ def build_model(args):
     logger = get_logger()
     model_func = globals()[args.model_name]
     model = model_func(max_position_embeddings=args.seq_length, checkpoint=args.use_activation_checkpoint)
+
+    if pm.DATA.world_size > 1:
+        model = DDP(model, process_group=pm.DATA.group)
+
     logger.info("Model is built.")
     return model
 
@@ -425,10 +427,13 @@ def build_data(args):
     tokenizer = GPT2Tokenizer(vocab_file=args.tokenizer_path + "/vocab.json",
                               merges_file=args.tokenizer_path + "/merges.txt")
 
+    if args.micro_batch_size is None:
+        args.micro_batch_size = args.global_batch_size // pm.DATA.world_size
+
     train_data = get_dataloader(
         dataset=dataset["train"],
         shuffle=True,
-        batch_size=args.batch_size,
+        batch_size=args.micro_batch_size,
         drop_last=True,
         collate_fn=partial(_tokenize, tokenizer=tokenizer, seq_length=args.seq_length),
         num_workers=4,
@@ -436,7 +441,7 @@ def build_data(args):
     )
     test_data = get_dataloader(
         dataset=dataset["test"],
-        batch_size=args.batch_size,
+        batch_size=args.micro_batch_size,
         collate_fn=partial(_tokenize, tokenizer=tokenizer, seq_length=args.seq_length),
         num_workers=4,
         pin_memory=True,
@@ -464,7 +469,7 @@ def build_optimizer(args, params):
 def build_scheduler(args, n_steps, optimizer):
     logger = get_logger()
     max_steps = n_steps * args.num_epochs
-    warmup_steps = n_steps * args.warmup_epochs
+    warmup_steps = min(args.warmup_steps, max_steps)
     lr_scheduler = get_linear_schedule_with_warmup(optimizer,
                                                    num_warmup_steps=warmup_steps,
                                                    num_training_steps=max_steps)

@@ -1,4 +1,6 @@
-import collections.abc
+from collections import OrderedDict
+from collections.abc import Iterable
+from functools import partial
 from itertools import repeat
 
 import torch
@@ -16,7 +18,7 @@ def get_tensor_parallel_mode():
 def _ntuple(n):
 
     def parse(x):
-        if isinstance(x, collections.abc.Iterable):
+        if isinstance(x, Iterable):
             return x
         return tuple(repeat(x, n))
 
@@ -36,11 +38,21 @@ def split_tensor(tensor, dim, parallel_mode):
 class AsyncGradientBucket(object):
 
     def __init__(self):
-        self.bucket = dict()
+        self.bucket = OrderedDict()
+
+    def __len__(self):
+        return len(self.bucket)
 
     def push(self, async_op, grad_tensor, param_id):
         self.bucket[param_id] = tuple((async_op, grad_tensor))
-        return None
+        return torch.zeros_like(grad_tensor, dtype=grad_tensor.dtype, device=grad_tensor.device)
+
+    def pop(self, param_id):
+        grad = None
+        if param_id in self.bucket:
+            op, grad = self.bucket.pop(param_id)
+            op.wait()
+        return grad
 
     def synchronize(self, params):
         for p in params:
@@ -48,11 +60,7 @@ class AsyncGradientBucket(object):
             if i in self.bucket:
                 op, grad = self.bucket.pop(i)
                 op.wait()
-                if p.grad is None:
-                    p.grad = grad
-                else:
-                    p.grad.add_(grad)
-        torch.cuda.default_stream().synchronize()
+                p.grad.add_(grad)
 
 
 _async_grad_bucket = AsyncGradientBucket()
@@ -62,5 +70,21 @@ def push_async_grad(op, grad, param_id):
     return _async_grad_bucket.push(op, grad, param_id)
 
 
-def synchronize(params):
-    return _async_grad_bucket.synchronize(params)
+def pop_async_grad(param_id):
+    return _async_grad_bucket.pop(param_id)
+
+
+def _async_grad_hook(grad, param_id):
+    grad.add_(pop_async_grad(param_id))
+    return grad
+
+
+def register_async_grad_hook(param):
+    param.register_hook(partial(_async_grad_hook, param_id=id(param)))
+
+
+def synchronize(params=list()):
+    _async_grad_bucket.synchronize(params)
+    torch.cuda.default_stream().synchronize()
+    if len(_async_grad_bucket) > 0:
+        raise RuntimeError(f"{len(_async_grad_bucket)} asynchronous gradient(s) not collected.")

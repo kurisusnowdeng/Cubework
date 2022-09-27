@@ -2,7 +2,7 @@ import math
 from typing import Callable
 
 from cubework.distributed import ParallelManager as pm
-from cubework.global_vars import VOCAB_PARALLEL, env
+from cubework.global_vars import env
 from cubework.utils import get_current_device, seed
 from torch import dtype, nn
 
