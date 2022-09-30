@@ -6,8 +6,11 @@ import cubework.module as cube_nn
 import numpy as np
 import torch
 import torchvision
-from cubework.utils import get_dataloader, get_logger
-from torch import dtype, nn
+from cubework.distributed import ParallelManager as pm
+from cubework.module.utils import to_2tuple
+from cubework.utils import get_current_device, get_dataloader, get_logger
+from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torchvision import transforms
 from transformers.optimization import get_cosine_schedule_with_warmup
 
@@ -21,21 +24,17 @@ class ViTEmbedding(nn.Module):
         in_chans: int,
         embedding_size: int,
         dropout: float,
-        dtype: dtype = None,
         flatten: bool = True,
     ):
         super().__init__()
-        self.patch_embed = cube_nn.PatchEmbedding(
-            img_size,
-            patch_size,
-            in_chans,
-            embedding_size,
-            dtype=dtype,
-            flatten=flatten,
-            weight_initializer=cube_nn.init.lecun_normal_(),
-            bias_initializer=cube_nn.init.zeros_(),
-            position_embed_initializer=cube_nn.init.trunc_normal_(std=0.02),
-        )
+        self.patch_embed = cube_nn.PatchEmbedding(img_size,
+                                                  patch_size,
+                                                  in_chans,
+                                                  embedding_size,
+                                                  flatten=flatten,
+                                                  weight_initializer=cube_nn.init.lecun_normal_(),
+                                                  bias_initializer=cube_nn.init.zeros_(),
+                                                  position_embed_initializer=cube_nn.init.trunc_normal_(std=0.02))
         self.dropout = cube_nn.Dropout(dropout)
 
     def forward(self, x):
@@ -53,27 +52,20 @@ class ViTSelfAttention(nn.Module):
         attention_dropout: float,
         dropout: float,
         bias: bool = True,
-        dtype: dtype = None,
     ):
         super().__init__()
         self.attention_head_size = hidden_size // num_heads
-        self.query_key_value = cube_nn.Linear(
-            hidden_size,
-            3 * hidden_size,
-            dtype=dtype,
-            bias=bias,
-            weight_initializer=cube_nn.init.xavier_uniform_(),
-            bias_initializer=cube_nn.init.normal_(std=1e-6),
-        )
+        self.query_key_value = cube_nn.Linear(hidden_size,
+                                              3 * hidden_size,
+                                              bias=bias,
+                                              weight_initializer=cube_nn.init.xavier_uniform_(),
+                                              bias_initializer=cube_nn.init.normal_(std=1e-6))
         self.attention_dropout = cube_nn.Dropout(attention_dropout)
-        self.dense = cube_nn.Linear(
-            hidden_size,
-            hidden_size,
-            dtype=dtype,
-            bias=True,
-            weight_initializer=cube_nn.init.xavier_uniform_(),
-            bias_initializer=cube_nn.init.normal_(std=1e-6),
-        )
+        self.dense = cube_nn.Linear(hidden_size,
+                                    hidden_size,
+                                    bias=True,
+                                    weight_initializer=cube_nn.init.xavier_uniform_(),
+                                    bias_initializer=cube_nn.init.normal_(std=1e-6))
         self.dropout = cube_nn.Dropout(dropout)
         self.softmax = nn.Softmax(dim=-1)
 
@@ -110,28 +102,21 @@ class ViTMLP(nn.Module):
         intermediate_size: int,
         activation: Callable,
         dropout: float,
-        dtype: dtype = None,
         bias: bool = True,
     ):
         super().__init__()
-        self.dense_1 = cube_nn.Linear(
-            hidden_size,
-            intermediate_size,
-            dtype=dtype,
-            bias=bias,
-            weight_initializer=cube_nn.init.xavier_uniform_(),
-            bias_initializer=cube_nn.init.normal_(std=1e-6),
-        )
+        self.dense_1 = cube_nn.Linear(hidden_size,
+                                      intermediate_size,
+                                      bias=bias,
+                                      weight_initializer=cube_nn.init.xavier_uniform_(),
+                                      bias_initializer=cube_nn.init.normal_(std=1e-6))
         self.activation = activation
         self.dropout_1 = cube_nn.Dropout(dropout)
-        self.dense_2 = cube_nn.Linear(
-            intermediate_size,
-            hidden_size,
-            dtype=dtype,
-            bias=bias,
-            weight_initializer=cube_nn.init.xavier_uniform_(),
-            bias_initializer=cube_nn.init.normal_(std=1e-6),
-        )
+        self.dense_2 = cube_nn.Linear(intermediate_size,
+                                      hidden_size,
+                                      bias=bias,
+                                      weight_initializer=cube_nn.init.xavier_uniform_(),
+                                      bias_initializer=cube_nn.init.normal_(std=1e-6))
         self.dropout_2 = cube_nn.Dropout(dropout)
 
     def forward(self, x):
@@ -150,31 +135,24 @@ class ViTHead(nn.Module):
         hidden_size: int,
         num_classes: int,
         representation_size: int = None,
-        dtype: dtype = None,
         bias: bool = True,
     ):
         super().__init__()
         if representation_size:
-            self.representation = cube_nn.Linear(
-                hidden_size,
-                representation_size,
-                bias=bias,
-                dtype=dtype,
-                weight_initializer=cube_nn.init.zeros_(),
-                bias_initializer=cube_nn.init.zeros_(),
-            )
+            self.representation = cube_nn.Linear(hidden_size,
+                                                 representation_size,
+                                                 bias=bias,
+                                                 weight_initializer=cube_nn.init.zeros_(),
+                                                 bias_initializer=cube_nn.init.zeros_())
         else:
             self.representation = None
             representation_size = hidden_size
 
-        self.dense = cube_nn.Classifier(
-            representation_size,
-            num_classes,
-            dtype=dtype,
-            bias=bias,
-            weight_initializer=cube_nn.init.zeros_(),
-            bias_initializer=cube_nn.init.zeros_(),
-        )
+        self.dense = cube_nn.Classifier(representation_size,
+                                        num_classes,
+                                        bias=bias,
+                                        weight_initializer=cube_nn.init.zeros_(),
+                                        bias_initializer=cube_nn.init.zeros_())
 
     def forward(self, x):
         x = x[:, 0]
@@ -196,31 +174,24 @@ class ViTBlock(nn.Module):
         dropout: float,
         drop_path: float = 0.0,
         layernorm_epsilon: float = 1e-6,
-        dtype: dtype = None,
         bias: bool = True,
         checkpoint: bool = False,
     ):
         super().__init__()
         self.checkpoint = checkpoint
-        self.norm1 = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon, dtype=dtype)
-        self.attn = ViTSelfAttention(
-            hidden_size=hidden_size,
-            num_heads=num_heads,
-            attention_dropout=attention_dropout,
-            dropout=dropout,
-            bias=bias,
-            dtype=dtype,
-        )
+        self.norm1 = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon)
+        self.attn = ViTSelfAttention(hidden_size=hidden_size,
+                                     num_heads=num_heads,
+                                     attention_dropout=attention_dropout,
+                                     dropout=dropout,
+                                     bias=bias)
         self.drop_path = cube_nn.DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
-        self.norm2 = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon, dtype=dtype)
-        self.mlp = ViTMLP(
-            hidden_size=hidden_size,
-            intermediate_size=intermediate_size,
-            activation=activation,
-            dropout=dropout,
-            dtype=dtype,
-            bias=bias,
-        )
+        self.norm2 = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon)
+        self.mlp = ViTMLP(hidden_size=hidden_size,
+                          intermediate_size=intermediate_size,
+                          activation=activation,
+                          dropout=dropout,
+                          bias=bias)
 
     def _forward(self, x):
         x = x + self.drop_path(self.attn(self.norm1(x)))
@@ -252,11 +223,17 @@ class VisionTransformer(nn.Module):
         drop_path: float = 0.0,
         layernorm_epsilon: float = 1e-6,
         activation: Callable = nn.functional.gelu,
-        dtype: dtype = None,
         bias: bool = True,
         checkpoint: bool = False,
     ):
         super().__init__()
+
+        self.img_size = img_size
+        self.patch_size = patch_size
+        img_size = to_2tuple(img_size)
+        patch_size = to_2tuple(patch_size)
+        grid_size = (img_size[0] // patch_size[0], img_size[1] // patch_size[1])
+        self.num_patches = grid_size[0] * grid_size[1]
 
         self.embed = ViTEmbedding(
             img_size=img_size,
@@ -264,11 +241,10 @@ class VisionTransformer(nn.Module):
             in_chans=in_chans,
             embedding_size=hidden_size,
             dropout=dropout,
-            dtype=dtype,
         )
 
         dpr = [x.item() for x in torch.linspace(0, drop_path, depth)]
-        self.blocks = [
+        self.blocks = nn.ModuleList([
             ViTBlock(
                 hidden_size=hidden_size,
                 num_heads=num_heads,
@@ -277,21 +253,17 @@ class VisionTransformer(nn.Module):
                 dropout=dropout,
                 drop_path=dpr[i],
                 activation=activation,
-                dtype=dtype,
                 bias=bias,
                 checkpoint=checkpoint,
             ) for i in range(depth)
-        ]
+        ])
 
-        self.norm = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon, dtype=dtype)
+        self.norm = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon)
 
-        self.head = ViTHead(
-            hidden_size=hidden_size,
-            num_classes=num_classes,
-            representation_size=representation_size,
-            dtype=dtype,
-            bias=bias,
-        )
+        self.head = ViTHead(hidden_size=hidden_size,
+                            num_classes=num_classes,
+                            representation_size=representation_size,
+                            bias=bias)
 
     def forward(self, pixel_values):
         x = self.embed(pixel_values)
@@ -309,7 +281,7 @@ def vit_small(checkpoint=False):
         img_size=224,
         patch_size=16,
         hidden_size=384,
-        num_heads=12,
+        num_heads=16,
         intermediate_size=1536,
         depth=12,
         checkpoint=checkpoint,
@@ -322,7 +294,7 @@ def vit_base(checkpoint=False):
         img_size=224,
         patch_size=16,
         hidden_size=768,
-        num_heads=12,
+        num_heads=16,
         intermediate_size=3072,
         depth=12,
         checkpoint=checkpoint,
@@ -439,11 +411,21 @@ class MixupAccuracy(cube_nn.Accuracy):
 
 
 def build_model(args):
+    logger = get_logger()
     model_func = globals()[args.model_name]
-    return model_func(checkpoint=args.use_activation_checkpoint)
+    model = model_func(checkpoint=args.use_activation_checkpoint)
+    model = model.to(get_current_device())
+
+    if pm.DATA.world_size > 1:
+        model = DDP(model, process_group=pm.DATA.group)
+        setattr(model, "num_patches", model.module.num_patches)
+
+    logger.info("Model is built.")
+    return model
 
 
 def build_data(args):
+    logger = get_logger()
     transform_train = transforms.Compose([
         transforms.RandomResizedCrop(224),
         transforms.AutoAugment(policy=transforms.AutoAugmentPolicy.IMAGENET),
@@ -457,62 +439,68 @@ def build_data(args):
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
     ])
 
+    if args.micro_batch_size is None:
+        args.micro_batch_size = args.global_batch_size // pm.DATA.world_size
+    logger.info(f"Using global batch size = {args.global_batch_size}, micro batch size = {args.micro_batch_size}.")
+
     train_dataset = torchvision.datasets.CIFAR10(root=args.dataset_path, train=True, download=True)
     test_dataset = torchvision.datasets.CIFAR10(root=args.dataset_path, train=False)
     train_data = get_dataloader(
         dataset=train_dataset,
         shuffle=True,
-        batch_size=args.batch_size,
+        batch_size=args.micro_batch_size,
         drop_last=True,
         collate_fn=partial(_mixup_data, transform=transform_train, alpha=0.8, train=True),
-        num_workers=1,
+        num_workers=4,
         pin_memory=True,
     )
     test_data = get_dataloader(
         dataset=test_dataset,
-        batch_size=args.batch_size,
+        batch_size=args.micro_batch_size,
         collate_fn=partial(_mixup_data, transform=transform_test, alpha=0.8, train=False),
-        num_workers=1,
+        num_workers=4,
         pin_memory=True,
     )
+    logger.info("Train and test data are built.")
     return train_data, test_data
 
 
 def build_criterion():
-    return MixupLoss(), MixupAccuracy()
+    logger = get_logger()
+    criterion, metric = MixupLoss(), MixupAccuracy()
+    logger.info("Loss and metric function are built.")
+    return criterion, metric
 
 
 def build_optimizer(args, params):
+    logger = get_logger()
     optimizer = torch.optim.AdamW(params, lr=args.learning_rate, weight_decay=args.weight_decay)
+    logger.info("Optimizer is built.")
     return optimizer
 
 
 def build_scheduler(args, n_steps, optimizer):
+    logger = get_logger()
     max_steps = n_steps * args.num_epochs
-    warmup_steps = n_steps * args.warmup_epochs
+    warmup_steps = min(args.warmup_steps, max_steps)
     lr_scheduler = get_cosine_schedule_with_warmup(optimizer,
                                                    num_warmup_steps=warmup_steps,
                                                    num_training_steps=max_steps)
+    logger.info("Learning rate scheduler is built.")
     return lr_scheduler
 
 
 def build_vit(args):
-    logger = get_logger()
-
     model = build_model(args)
-    logger.info("Model is built.")
 
     train_data, test_data = build_data(args)
-    logger.info("Train and test data are built.")
 
     criterion, metric = build_criterion()
-    logger.info("Loss and metric function are built.")
 
     optimizer = build_optimizer(args, model.parameters())
     n_steps = len(train_data)
     if args.steps_per_epoch is not None and args.steps_per_epoch < n_steps:
         n_steps = args.steps_per_epoch
     lr_scheduler = build_scheduler(args, n_steps, optimizer)
-    logger.info("Optimizer and learning rate scheduler are built.")
 
     return model, train_data, test_data, criterion, metric, optimizer, lr_scheduler

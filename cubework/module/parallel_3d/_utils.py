@@ -7,7 +7,6 @@ from cubework.distributed.utils import ParallelMode
 from cubework.global_vars import env
 from torch import Tensor
 from torch.cuda.amp import custom_bwd, custom_fwd
-from ..utils import push_async_grad
 
 
 def get_depth_from_env() -> int:

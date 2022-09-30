@@ -27,6 +27,9 @@ _default_logger = None
 
 
 def init_logger():
+    for name in logging.Logger.manager.loggerDict.keys():
+        logging.getLogger(name).setLevel(logging.ERROR)
+
     global _default_logger
     _default_logger = logging.getLogger("cubework")
 
@@ -40,6 +43,7 @@ def init_logger():
     formatter = logging.Formatter("%(message)s", datefmt="[%Y/%m/%d %H:%M:%S.%f]")
     handler.setFormatter(formatter)
     _default_logger.addHandler(handler)
+    _default_logger.propagate = False
 
 
 def write_logger_to_file(file, logger=None):

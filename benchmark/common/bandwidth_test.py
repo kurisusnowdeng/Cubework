@@ -34,6 +34,6 @@ for i in progress:
     logger.info(f"Step {i}: used time = {used_time/ 1e3:.3f} s | all completed = {end.query()}")
     total_time += used_time
 
-logger.info(
-    f"Vol = {total_vol / 1024**3 :.3f} GB | time = {total_time/ 1e3:.3f} s | bandwidth = {total_vol * 1e3 / (total_time * 1024 ** 3):.3f} GB/s"
-)
+logger.info(f"Vol = {total_vol / 1024**3 :.3f} GB"
+            f" | time = {total_time/ 1e3:.3f} s"
+            f" | bandwidth = {total_vol * 1e3 / (total_time * 1024 ** 3):.3f} GB/s")

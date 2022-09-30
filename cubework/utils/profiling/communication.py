@@ -14,6 +14,7 @@ torch_reduce = dist.reduce
 
 
 class CommProfiler(object):
+
     def __init__(self):
         self.start_event = torch.cuda.Event(enable_timing=True)
         self.end_event = torch.cuda.Event(enable_timing=True)
@@ -62,6 +63,7 @@ class CommProfiler(object):
 
 
 class CommHandler(object):
+
     def __init__(self, profiler, work):
         super().__init__()
         self.prof = profiler
@@ -71,10 +73,15 @@ class CommHandler(object):
         self.work.wait()
         self.prof.finish()
 
+    def get_future(self, *args, **kwargs):
+        return self.work.get_future(*args, **kwargs)
 
-def all_reduce(
-    tensor: Tensor, op: ReduceOp = ReduceOp.SUM, group=None, async_op: bool = False, profiler: CommProfiler = None
-):
+
+def all_reduce(tensor: Tensor,
+               op: ReduceOp = ReduceOp.SUM,
+               group=None,
+               async_op: bool = False,
+               profiler: CommProfiler = None):
     comm_size = dist.get_world_size(group)
     correction = 2 * (comm_size - 1) / comm_size
     comm_vol = correction * tensor.element_size() * tensor.numel()

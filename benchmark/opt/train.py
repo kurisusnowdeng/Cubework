@@ -7,6 +7,7 @@ from cubework.distributed import ParallelManager as pm
 from cubework.distributed.collective import all_reduce
 from cubework.utils import (CommProfiler, calc_model_size, calc_tflops, clip_grad_norm, get_current_device, get_logger,
                             write_logger_to_file)
+from fairscale.optim.grad_scaler import GradScaler, ShardedGradScaler
 from tqdm import tqdm
 
 from opt import build_opt
@@ -65,14 +66,11 @@ def _train(epoch, args):
 
     data_iter = iter(train_data)
 
-    torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
 
     if comm_profiler is not None:
         comm_profiler.reset()
         comm_profiler.start()
-
-    epoch_start = time.time()
 
     for i in progress:
         for _ in range(accum_size):
@@ -89,7 +87,7 @@ def _train(epoch, args):
                     outputs = model(**batch)
             else:
                 outputs = model(**batch)
-            loss = criterion(outputs, labels)
+            loss = criterion(outputs[0], labels)
             train_loss += loss.item()
             torch.cuda.synchronize()
             fwd_end = time.time()
@@ -129,7 +127,7 @@ def _train(epoch, args):
         opt_time += opt_end - opt_start
 
         if pm.GLOBAL.rank == 0:
-            avg_time = (time.time() - epoch_start) / (i + 1)
+            avg_time = (data_time + fwd_time + bwd_time + opt_time) / (i + 1)
             avg_samples = num_samples * pm.DATA.world_size / (i + 1)
             avg_tokens = num_tokens * pm.DATA.world_size / (i + 1)
             batch_tflops = calc_tflops(
@@ -150,9 +148,7 @@ def _train(epoch, args):
                 tflops=batch_tflops,
             )
 
-    epoch_end = time.time()
-    used_time = epoch_end - epoch_start
-    peak_mem = torch.cuda.max_memory_allocated()
+    used_time = data_time + fwd_time + bwd_time + opt_time
 
     if comm_profiler is not None:
         comm_cnt, comm_vol, comm_time = comm_profiler.stop()
@@ -169,7 +165,12 @@ def _train(epoch, args):
                          use_checkpoint=args.use_activation_checkpoint)
     msg += f" | TFLOPS = {tflops:.3f}"
 
+    torch.cuda.empty_cache()
+    peak_mem = torch.cuda.max_memory_allocated()
+    reserved_mem = torch.cuda.max_memory_reserved()
+
     msg += f"\n[Epoch {epoch} / Train]: Peak memory = {peak_mem / 1024**3:.3f} GB"
+    msg += f" | Reserved memory = {reserved_mem / 1024**3:.3f} GB"
     state_mem = torch.cuda.memory_allocated() - model_mem
     msg += f" | Gradients & optimizer states memory = {state_mem / 1024**3:.3f} GB."
     activation_mem = peak_mem - state_mem - model_mem
@@ -229,9 +230,9 @@ def _test(epoch, args):
                     outputs = model(**batch)
             else:
                 outputs = model(**batch)
-            loss = criterion(outputs, labels)
+            loss = criterion(outputs[0], labels)
             train_loss += loss.item()
-            eval_res = metric(outputs, labels, loss)
+            eval_res = metric(outputs[0], labels, loss)
             torch.cuda.synchronize()
             fwd_end = time.time()
 
@@ -308,11 +309,14 @@ def get_parser():
     parser.add_argument("--do_validation", "--eval", action="store_true", default=False)
     parser.add_argument("--validation_interval", "--n_eval", type=int, default=1)
 
+    parser.add_argument("--use_fully_sharded_data_parallel", "--fsdp", action="store_true", default=False)
+
     parser.add_argument("--use_activation_checkpoint", "--ckpt", action="store_true", default=False)
 
     parser.add_argument("--gradient_clipping", "--clip", type=float, default=0.0)
 
     parser.add_argument("--use_mixed_precision", "--amp", action="store_true", default=False)
+    parser.add_argument("--use_amp_opt_level_3", "-O3", action="store_true", default=False)
     parser.add_argument("--fp16_initial_scale", type=float, default=2**15)
     parser.add_argument("--fp16_growth_factor", type=float, default=2.0)
     parser.add_argument("--fp16_backoff_factor", type=float, default=0.5)
@@ -338,7 +342,12 @@ def train():
 
     global scaler
     if args.use_mixed_precision:
-        scaler = torch.cuda.amp.GradScaler(
+        scaler_cls = torch.cuda.amp.GradScaler
+        if args.use_amp_opt_level_3:
+            scaler_cls = GradScaler
+        elif args.use_fully_sharded_data_parallel:
+            scaler_cls = ShardedGradScaler
+        scaler = scaler_cls(
             enabled=True,
             init_scale=args.fp16_initial_scale,
             growth_factor=args.fp16_growth_factor,
@@ -352,12 +361,17 @@ def train():
 
     global numel
     numel, _ = calc_model_size(model)
+    if args.use_fully_sharded_data_parallel:
+        numel *= pm.DATA.world_size
+        if pm.TENSOR.is_initialized():
+            numel *= pm.TENSOR.world_size
     if numel < 1e9:
         msg = f"{numel / 1e6:.3f} M"
     else:
         msg = f"{numel / 1e9:.3f} B"
     global model_mem
-    model_mem = torch.cuda.max_memory_allocated()
+    torch.cuda.empty_cache()
+    model_mem = torch.cuda.memory_allocated()
     logger.info(f"Parameter size = {msg} | Model memory = {model_mem / 1024**3:.3f} GB.")
 
     logger.info("Benchmark start.")

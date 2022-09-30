@@ -51,7 +51,8 @@ class AsyncGradientBucket(object):
         grad = None
         if param_id in self.bucket:
             op, grad = self.bucket.pop(param_id)
-            op.wait()
+            if op is not None:
+                op.wait()
         return grad
 
     def synchronize(self, params):
@@ -59,7 +60,8 @@ class AsyncGradientBucket(object):
             i = id(p)
             if i in self.bucket:
                 op, grad = self.bucket.pop(i)
-                op.wait()
+                if op is not None:
+                    op.wait()
                 p.grad.add_(grad)
 
 

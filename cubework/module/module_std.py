@@ -7,7 +7,6 @@ from typing import Callable
 
 import torch
 import torch.nn.functional as F
-from cubework.utils import get_current_device
 from torch import Tensor
 from torch import nn as nn
 
@@ -26,7 +25,7 @@ def drop_path(x, drop_prob: float = 0.0, training: bool = False):
     if drop_prob == 0.0 or not training:
         return x
     keep_prob = 1 - drop_prob
-    shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
+    shape = (x.shape[0], ) + (1, ) * (x.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
     random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
     random_tensor.floor_()  # binarize
     output = x.div(keep_prob) * random_tensor
@@ -45,17 +44,17 @@ class DropPath(nn.Module):
 
 
 class PatchEmbeddingSTD(nn.Module):
+
     def __init__(
-        self,
-        img_size: int,
-        patch_size: int,
-        in_chans: int,
-        embed_size: int,
-        flatten: bool = True,
-        dtype: torch.dtype = None,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
-        position_embed_initializer: Callable = init.zeros_(),
+            self,
+            img_size: int,
+            patch_size: int,
+            in_chans: int,
+            embed_size: int,
+            flatten: bool = True,
+            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+            position_embed_initializer: Callable = init.zeros_(),
     ):
         super().__init__()
         img_size = to_2tuple(img_size)
@@ -66,14 +65,10 @@ class PatchEmbeddingSTD(nn.Module):
         self.num_patches = self.grid_size[0] * self.grid_size[1]
         self.flatten = flatten
 
-        self.weight = nn.Parameter(
-            torch.empty((embed_size, in_chans, *self.patch_size), device=get_current_device(), dtype=dtype)
-        )
-        self.bias = nn.Parameter(torch.empty(embed_size, device=get_current_device(), dtype=dtype))
-        self.cls_token = nn.Parameter(torch.zeros((1, 1, embed_size), device=get_current_device(), dtype=dtype))
-        self.pos_embed = nn.Parameter(
-            torch.zeros((1, self.num_patches + 1, embed_size), device=get_current_device(), dtype=dtype)
-        )
+        self.weight = nn.Parameter(torch.empty((embed_size, in_chans, *self.patch_size)))
+        self.bias = nn.Parameter(torch.empty(embed_size))
+        self.cls_token = nn.Parameter(torch.zeros((1, 1, embed_size)))
+        self.pos_embed = nn.Parameter(torch.zeros((1, self.num_patches + 1, embed_size)))
 
         self.reset_parameters(weight_initializer, bias_initializer, position_embed_initializer)
 
@@ -85,9 +80,8 @@ class PatchEmbeddingSTD(nn.Module):
 
     def forward(self, input_: Tensor) -> Tensor:
         B, C, H, W = input_.shape
-        assert (
-            H == self.img_size[0] and W == self.img_size[1]
-        ), f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
+        assert (H == self.img_size[0] and W == self.img_size[1]
+                ), f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
         output = F.conv2d(input_, self.weight, self.bias, stride=self.patch_size)
         if self.flatten:
             output = output.flatten(2).transpose(1, 2)  # BCHW -> BNC
@@ -99,15 +93,15 @@ class PatchEmbeddingSTD(nn.Module):
 
 
 class ClassifierSTD(nn.Module):
+
     def __init__(
-        self,
-        in_features: int,
-        num_classes: int,
-        weight: nn.Parameter = None,
-        bias: bool = True,
-        dtype: torch.dtype = None,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+            self,
+            in_features: int,
+            num_classes: int,
+            weight: nn.Parameter = None,
+            bias: bool = True,
+            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
     ):
         super().__init__()
         self.in_features = in_features
@@ -117,12 +111,10 @@ class ClassifierSTD(nn.Module):
             self.weight = weight
             self.has_weight = False
         else:
-            self.weight = nn.Parameter(
-                torch.empty(self.num_classes, self.in_features, device=get_current_device(), dtype=dtype)
-            )
+            self.weight = nn.Parameter(torch.empty(self.num_classes, self.in_features))
             self.has_weight = True
         if bias:
-            self.bias = nn.Parameter(torch.zeros(self.num_classes, device=get_current_device(), dtype=dtype))
+            self.bias = nn.Parameter(torch.zeros(self.num_classes))
         else:
             self.bias = None
 

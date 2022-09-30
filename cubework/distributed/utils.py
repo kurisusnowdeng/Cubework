@@ -25,6 +25,7 @@ class ParallelMode(object):
     _local_rank = None
     _world_size = None
     _group = None
+    _cpu_group = None
     _ranks_in_group = None
     _rng_state = None
     _cuda_rng_state = None
@@ -54,6 +55,10 @@ class ParallelMode(object):
         return self._group
 
     @property
+    def cpu_group(self):
+        return self._cpu_group
+
+    @property
     def ranks_in_group(self):
         return self._ranks_in_group
 
@@ -71,12 +76,13 @@ class ParallelMode(object):
     def is_initialized(self):
         return self._initialized
 
-    def init(self, rank, local_rank, world_size, process_group, ranks_in_group, seed=None):
+    def init(self, rank, local_rank, world_size, process_group, cpu_group, ranks_in_group, seed=None):
         self._initialized = True
         self._rank = rank
         self._local_rank = local_rank
         self._world_size = world_size
         self._group = process_group
+        self._cpu_group = cpu_group
         self._ranks_in_group = ranks_in_group
 
         if seed is not None:
@@ -113,8 +119,11 @@ def init_global():
     assert dist.is_initialized()
     rank = dist.get_rank()
     world_size = dist.get_world_size()
+    ranks = list(range(world_size))
+    process_group = None
+    cpu_group = dist.new_group(ranks, backend='gloo') if dist.get_backend() != 'gloo' else process_group
 
-    ParallelManager.GLOBAL.init(rank, rank, world_size, None, list(range(world_size)))
+    ParallelManager.GLOBAL.init(rank, rank, world_size, process_group, cpu_group, ranks)
 
 
 def init_data_parallel(data_parallel_size):
@@ -131,14 +140,16 @@ def init_data_parallel(data_parallel_size):
     for i in range(num_data_parallel_group):
         ranks = [i + j * num_data_parallel_group for j in range(data_parallel_size)]
         group = dist.new_group(ranks)
+        group_cpu = dist.new_group(ranks, backend='gloo') if dist.get_backend() != 'gloo' else group
 
         if rank in ranks:
             local_rank = ranks.index(rank)
             group_world_size = len(ranks)
             process_group = group
+            cpu_group = group_cpu
             ranks_in_group = ranks
 
-    ParallelManager.DATA.init(rank, local_rank, group_world_size, process_group, ranks_in_group)
+    ParallelManager.DATA.init(rank, local_rank, group_world_size, process_group, cpu_group, ranks_in_group)
 
 
 def init_1d_parallel(tensor_parallel_size, seed):
@@ -157,14 +168,22 @@ def init_1d_parallel(tensor_parallel_size, seed):
     for i in range(num_1d_group):
         ranks = [i * tensor_parallel_size + j for j in range(tensor_parallel_size)]
         group = dist.new_group(ranks)
+        group_cpu = dist.new_group(ranks, backend='gloo') if dist.get_backend() != 'gloo' else group
 
         if rank in ranks:
             local_rank = ranks.index(rank)
             group_world_size = len(ranks)
             process_group = group
+            cpu_group = group_cpu
             ranks_in_group = ranks
 
-    ParallelManager.PARALLEL_1D.init(rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed)
+    ParallelManager.PARALLEL_1D.init(rank,
+                                     local_rank,
+                                     group_world_size,
+                                     process_group,
+                                     cpu_group,
+                                     ranks_in_group,
+                                     seed=seed)
 
 
 def init_2d_parallel(tensor_parallel_size, seed):
@@ -185,14 +204,22 @@ def init_2d_parallel(tensor_parallel_size, seed):
         for j in range(summa_dim):
             ranks = [i * tensor_parallel_size + j + k * summa_dim for k in range(summa_dim)]
             group = dist.new_group(ranks)
+            group_cpu = dist.new_group(ranks, backend='gloo') if dist.get_backend() != 'gloo' else group
 
             if rank in ranks:
                 local_rank = ranks.index(rank)
                 group_world_size = len(ranks)
                 process_group = group
+                cpu_group = group_cpu
                 ranks_in_group = ranks
 
-    ParallelManager.PARALLEL_2D_COL.init(rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed)
+    ParallelManager.PARALLEL_2D_COL.init(rank,
+                                         local_rank,
+                                         group_world_size,
+                                         process_group,
+                                         cpu_group,
+                                         ranks_in_group,
+                                         seed=seed)
 
     # row group
     local_rank = None
@@ -203,14 +230,22 @@ def init_2d_parallel(tensor_parallel_size, seed):
         for j in range(summa_dim):
             ranks = [i * tensor_parallel_size + j * summa_dim + k for k in range(summa_dim)]
             group = dist.new_group(ranks)
+            group_cpu = dist.new_group(ranks, backend='gloo') if dist.get_backend() != 'gloo' else group
 
             if rank in ranks:
                 local_rank = ranks.index(rank)
                 group_world_size = len(ranks)
                 process_group = group
+                cpu_group = group_cpu
                 ranks_in_group = ranks
 
-    ParallelManager.PARALLEL_2D_ROW.init(rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed)
+    ParallelManager.PARALLEL_2D_ROW.init(rank,
+                                         local_rank,
+                                         group_world_size,
+                                         process_group,
+                                         cpu_group,
+                                         ranks_in_group,
+                                         seed=seed)
 
 
 def init_3d_parallel(tensor_parallel_size, seed):
@@ -233,14 +268,22 @@ def init_3d_parallel(tensor_parallel_size, seed):
             for k in range(depth):
                 ranks = [h * depth**3 + i + depth * (j + depth * k) for j in range(depth)]
                 group = dist.new_group(ranks)
+                group_cpu = dist.new_group(ranks, backend='gloo') if dist.get_backend() != 'gloo' else group
 
                 if rank in ranks:
                     local_rank = ranks.index(rank)
                     group_world_size = len(ranks)
                     process_group = group
+                    cpu_group = group_cpu
                     ranks_in_group = ranks
 
-    ParallelManager.PARALLEL_3D_INPUT.init(rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed)
+    ParallelManager.PARALLEL_3D_INPUT.init(rank,
+                                           local_rank,
+                                           group_world_size,
+                                           process_group,
+                                           cpu_group,
+                                           ranks_in_group,
+                                           seed=seed)
 
     # weight group
     local_rank = None
@@ -253,16 +296,22 @@ def init_3d_parallel(tensor_parallel_size, seed):
             for j in range(depth):
                 ranks = [h * depth**3 + i + depth * (j + depth * k) for i in range(depth)]
                 group = dist.new_group(ranks)
+                group_cpu = dist.new_group(ranks, backend='gloo') if dist.get_backend() != 'gloo' else group
 
                 if rank in ranks:
                     local_rank = ranks.index(rank)
                     group_world_size = len(ranks)
                     process_group = group
+                    cpu_group = group_cpu
                     ranks_in_group = ranks
 
-    ParallelManager.PARALLEL_3D_WEIGHT.init(
-        rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed
-    )
+    ParallelManager.PARALLEL_3D_WEIGHT.init(rank,
+                                            local_rank,
+                                            group_world_size,
+                                            process_group,
+                                            cpu_group,
+                                            ranks_in_group,
+                                            seed=seed)
 
     # output group
     local_rank = None
@@ -275,16 +324,22 @@ def init_3d_parallel(tensor_parallel_size, seed):
             for j in range(depth):
                 ranks = [h * depth**3 + i + depth * (j + depth * k) for k in range(depth)]
                 group = dist.new_group(ranks)
+                group_cpu = dist.new_group(ranks, backend='gloo') if dist.get_backend() != 'gloo' else group
 
                 if rank in ranks:
                     local_rank = ranks.index(rank)
                     group_world_size = len(ranks)
                     process_group = group
+                    cpu_group = group_cpu
                     ranks_in_group = ranks
 
-    ParallelManager.PARALLEL_3D_OUTPUT.init(
-        rank, local_rank, group_world_size, process_group, ranks_in_group, seed=seed
-    )
+    ParallelManager.PARALLEL_3D_OUTPUT.init(rank,
+                                            local_rank,
+                                            group_world_size,
+                                            process_group,
+                                            cpu_group,
+                                            ranks_in_group,
+                                            seed=seed)
 
     # input x weight group
     local_rank = None
@@ -296,11 +351,13 @@ def init_3d_parallel(tensor_parallel_size, seed):
         for k in range(depth):
             ranks = [h * depth**3 + i + depth * (j + depth * k) for j in range(depth) for i in range(depth)]
             group = dist.new_group(ranks)
+            group_cpu = dist.new_group(ranks, backend='gloo') if dist.get_backend() != 'gloo' else group
 
             if rank in ranks:
                 local_rank = ranks.index(rank)
                 group_world_size = len(ranks)
                 process_group = group
+                cpu_group = group_cpu
                 ranks_in_group = ranks
 
     ParallelManager.PARALLEL_3D_INPUT_X_WEIGHT.init(
@@ -308,6 +365,7 @@ def init_3d_parallel(tensor_parallel_size, seed):
         local_rank,
         group_world_size,
         process_group,
+        cpu_group,
         ranks_in_group,
         seed=seed,
     )
@@ -322,11 +380,13 @@ def init_3d_parallel(tensor_parallel_size, seed):
         for j in range(depth):
             ranks = [h * depth**3 + i + depth * (j + depth * k) for k in range(depth) for i in range(depth)]
             group = dist.new_group(ranks)
+            group_cpu = dist.new_group(ranks, backend='gloo') if dist.get_backend() != 'gloo' else group
 
             if rank in ranks:
                 local_rank = ranks.index(rank)
                 group_world_size = len(ranks)
                 process_group = group
+                cpu_group = group_cpu
                 ranks_in_group = ranks
 
     ParallelManager.PARALLEL_3D_OUTPUT_X_WEIGHT.init(
@@ -334,6 +394,7 @@ def init_3d_parallel(tensor_parallel_size, seed):
         local_rank,
         group_world_size,
         process_group,
+        cpu_group,
         ranks_in_group,
         seed=seed,
     )
@@ -360,18 +421,24 @@ def init_tensor_parallel(tensor_parallel_size, seed):
     for i in range(num_tensor_parallel_group):
         ranks = [i * tensor_parallel_size + j for j in range(tensor_parallel_size)]
         group = dist.new_group(ranks)
+        group_cpu = dist.new_group(ranks, backend='gloo') if dist.get_backend() != 'gloo' else group
 
         if rank in ranks:
             local_rank = ranks.index(rank)
             group_world_size = len(ranks)
             process_group = group
+            cpu_group = group_cpu
             ranks_in_group = ranks
     offset = seed + 1024
     tensor_parallel_seed = offset + local_rank
 
-    ParallelManager.TENSOR.init(
-        rank, local_rank, group_world_size, process_group, ranks_in_group, seed=tensor_parallel_seed
-    )
+    ParallelManager.TENSOR.init(rank,
+                                local_rank,
+                                group_world_size,
+                                process_group,
+                                cpu_group,
+                                ranks_in_group,
+                                seed=tensor_parallel_seed)
 
     _TENSOR_PARALLEL_INIT_FUNCS[env.mode](tensor_parallel_size, tensor_parallel_seed)
 

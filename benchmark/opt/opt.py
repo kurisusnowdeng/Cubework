@@ -5,9 +5,13 @@ from typing import Callable, List, Optional, Tuple
 import cubework.module as cube_nn
 import torch
 from cubework.distributed import ParallelManager as pm
-from cubework.utils import get_dataloader, get_logger
+from cubework.utils import get_current_device, get_dataloader, get_logger
 from datasets import load_from_disk
 from torch import nn
+# from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.fully_sharded_data_parallel import MixedPrecision, ShardingStrategy
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import GPT2Tokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
@@ -18,11 +22,12 @@ class OPTLearnedPositionalEmbedding(cube_nn.Embedding):
     This module learns positional embeddings up to a fixed maximum size.
     """
 
-    def __init__(self, num_embeddings: int, embedding_dim: int):
+    def __init__(self, num_embeddings: int, embedding_dim: int, dtype=None):
         # OPT is set up so that if padding_idx is specified then offset the embedding ids by 2
         # and adjust num_embeddings appropriately. Other models don't have this hack
-        self.offset = 2
-        super().__init__(num_embeddings + self.offset, embedding_dim)
+        offset = 2
+        super().__init__(num_embeddings + offset, embedding_dim, dtype=dtype)
+        self.offset = offset
 
     def forward(self, attention_mask: torch.LongTensor, past_key_values_length: int = 0):
         """`input_ids_shape` is expected to be [bsz x seqlen]."""
@@ -40,33 +45,15 @@ class OPTLearnedPositionalEmbedding(cube_nn.Embedding):
 class OPTAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(
-        self,
-        embed_dim: int,
-        num_heads: int,
-        dropout: float = 0.0,
-        bias: bool = True,
-    ):
+    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.0, bias: bool = True, dtype=None):
         super().__init__()
-        self.embed_dim = embed_dim
-        # self.num_heads = num_heads
-        # self.dropout = dropout
         self.head_dim = embed_dim // num_heads
 
-        if (self.head_dim * num_heads) != self.embed_dim:
-            raise ValueError(f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.embed_dim}"
-                             f" and `num_heads`: {num_heads}).")
         self.scaling = self.head_dim**-0.5
 
-        self.qkv_proj = cube_nn.Linear(embed_dim, 3 * embed_dim, bias=bias)
-        # self.k_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
-        # self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
-        # self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.qkv_proj = cube_nn.Linear(embed_dim, 3 * embed_dim, bias=bias, dtype=dtype)
         self.dropout = cube_nn.Dropout(dropout)
-        self.out_proj = cube_nn.Linear(embed_dim, embed_dim, bias=bias)
-
-    # def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
-    #     return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        self.out_proj = cube_nn.Linear(embed_dim, embed_dim, bias=bias, dtype=dtype)
 
     def forward(
         self,
@@ -89,24 +76,12 @@ class OPTAttention(nn.Module):
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
             value_states = torch.cat([past_key_value[1], value_states], dim=2)
 
-        # query_states = self.q_proj(hidden_states) * self.scaling
-        # if past_key_value is not None:
-        #     # reuse k, v, self_attention
-        #     key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
-        #     value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
-        #     key_states = torch.cat([past_key_value[0], key_states], dim=2)
-        #     value_states = torch.cat([past_key_value[1], value_states], dim=2)
-        # else:
-        #     # self_attention
-        #     key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
-        #     value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
-
         past_key_value = (key_states, value_states)
 
         proj_shape = (bsz * num_heads, -1, self.head_dim)
-        query_states = (query_states * self.scaling).view(*proj_shape)
-        key_states = key_states.view(*proj_shape)
-        value_states = value_states.view(*proj_shape)
+        query_states = (query_states * self.scaling).contiguous().view(*proj_shape)
+        key_states = key_states.contiguous().view(*proj_shape)
+        value_states = value_states.contiguous().view(*proj_shape)
 
         src_len = key_states.size(1)
         attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
@@ -150,7 +125,7 @@ class OPTAttention(nn.Module):
 
         # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output`
         # can be partitioned aross GPUs when using tensor-parallelism.
-        attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
+        attn_output = attn_output.reshape(bsz, tgt_len, self.head_dim * num_heads)
 
         attn_output = self.out_proj(attn_output)
 
@@ -167,20 +142,22 @@ class OPTDecoderLayer(nn.Module):
                  dropout: float = 0.1,
                  do_layer_norm_before: bool = True,
                  activation_function: Callable = nn.ReLU(),
-                 gradient_checkpointing: bool = False):
+                 gradient_checkpointing: bool = False,
+                 dtype=None):
         super().__init__()
         self.embed_dim = hidden_size
         self.self_attn = OPTAttention(embed_dim=self.embed_dim,
                                       num_heads=num_attention_heads,
-                                      dropout=attention_dropout)
+                                      dropout=attention_dropout,
+                                      dtype=dtype)
         self.dropout = cube_nn.Dropout(dropout)
         self.do_layer_norm_before = do_layer_norm_before
-        self.self_attn_layer_norm = cube_nn.LayerNorm(self.embed_dim)
+        self.self_attn_layer_norm = cube_nn.LayerNorm(self.embed_dim, dtype=dtype)
 
         self.activation_fn = activation_function
-        self.fc1 = cube_nn.Linear(self.embed_dim, ffn_dim)
-        self.fc2 = cube_nn.Linear(ffn_dim, self.embed_dim)
-        self.final_layer_norm = cube_nn.LayerNorm(self.embed_dim)
+        self.fc1 = cube_nn.Linear(self.embed_dim, ffn_dim, dtype=dtype)
+        self.fc2 = cube_nn.Linear(ffn_dim, self.embed_dim, dtype=dtype)
+        self.final_layer_norm = cube_nn.LayerNorm(self.embed_dim, dtype=dtype)
         self.gradient_checkpointing = gradient_checkpointing
 
     def _forward(
@@ -223,7 +200,7 @@ class OPTDecoderLayer(nn.Module):
         hidden_states = self.activation_fn(hidden_states)
 
         hidden_states = self.fc2(hidden_states)
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = self.dropout(hidden_states)
 
         hidden_states = (residual + hidden_states).view(hidden_states_shape)
 
@@ -282,7 +259,8 @@ class OPT(nn.Module):
                  layerdrop: float = 0.0,
                  padding_idx: int = 1,
                  activation_function: Callable = nn.ReLU(),
-                 gradient_checkpointing: bool = False):
+                 gradient_checkpointing: bool = False,
+                 dtype=None):
         super().__init__()
         self.dropout = dropout
         self.layerdrop = layerdrop
@@ -293,8 +271,9 @@ class OPT(nn.Module):
         self.embed_tokens = cube_nn.Embedding(vocab_size,
                                               hidden_size,
                                               vocab_parallel=True,
-                                              padding_idx=self.padding_idx)
-        self.embed_positions = OPTLearnedPositionalEmbedding(max_position_embeddings, hidden_size)
+                                              padding_idx=self.padding_idx,
+                                              dtype=dtype)
+        self.embed_positions = OPTLearnedPositionalEmbedding(max_position_embeddings, hidden_size, dtype=dtype)
 
         self.layers = nn.ModuleList([
             OPTDecoderLayer(
@@ -306,15 +285,20 @@ class OPT(nn.Module):
                 do_layer_norm_before=do_layer_norm_before,
                 activation_function=activation_function,
                 gradient_checkpointing=gradient_checkpointing,
+                dtype=dtype,
             ) for _ in range(num_hidden_layers)
         ])
 
         if do_layer_norm_before:
-            self.final_layer_norm = nn.LayerNorm(hidden_size)
+            self.final_layer_norm = cube_nn.LayerNorm(hidden_size, dtype=dtype)
         else:
             self.final_layer_norm = None
 
-        self.lm_head = cube_nn.Classifier(hidden_size, vocab_size, weight=self.embed_tokens.weight, bias=False)
+        self.lm_head = cube_nn.Classifier(hidden_size,
+                                          vocab_size,
+                                          weight=self.embed_tokens.weight,
+                                          bias=False,
+                                          dtype=dtype)
 
     def _make_causal_mask(self, input_ids_shape: torch.Size, dtype: torch.dtype, past_key_values_length: int = 0):
         """
@@ -358,10 +342,10 @@ class OPT(nn.Module):
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
             expanded_attn_mask = self._expand_mask(attention_mask, inputs_embeds.dtype,
                                                    tgt_len=input_shape[-1]).to(inputs_embeds.device)
-            combined_attention_mask = (expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask +
-                                       combined_attention_mask)
+            combined_attention_mask = expanded_attn_mask if combined_attention_mask is None \
+                else expanded_attn_mask + combined_attention_mask
 
-        return combined_attention_mask
+        return cube_nn.partition_batch(combined_attention_mask)
 
     def forward(
         self,
@@ -376,17 +360,18 @@ class OPT(nn.Module):
 
         past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
 
-        inputs_embeds = self.embed_tokens(input_ids)
-
-        if attention_mask is None:
-            attention_mask = torch.ones(inputs_embeds.shape[:2], dtype=torch.bool, device=inputs_embeds.device)
-        attention_mask = self._prepare_decoder_attention_mask(attention_mask, input_shape, inputs_embeds,
-                                                              past_key_values_length)
+        input_embeds = self.embed_tokens(input_ids)
 
         # embed positions
+        if attention_mask is None:
+            attention_mask = torch.ones(input_embeds.shape[:2], dtype=torch.bool, device=input_embeds.device)
+
         pos_embeds = self.embed_positions(attention_mask, past_key_values_length)
 
-        hidden_states = inputs_embeds + pos_embeds
+        attention_mask = self._prepare_decoder_attention_mask(attention_mask, input_shape, input_embeds,
+                                                              past_key_values_length)
+
+        hidden_states = input_embeds + pos_embeds
 
         # decoder layers
         next_cache = () if use_cache else None
@@ -431,7 +416,7 @@ class OPT(nn.Module):
         return outputs
 
 
-def opt_125m(max_position_embeddings=1024, checkpoint=False):
+def opt_125m(max_position_embeddings=1024, checkpoint=False, dtype=None):
     model_kwargs = dict(
         max_position_embeddings=max_position_embeddings,
         hidden_size=768,
@@ -439,11 +424,12 @@ def opt_125m(max_position_embeddings=1024, checkpoint=False):
         num_hidden_layers=12,
         num_attention_heads=16,
         gradient_checkpointing=checkpoint,
+        dtype=dtype,
     )
     return OPT(**model_kwargs)
 
 
-def opt_350m(max_position_embeddings=1024, checkpoint=False):
+def opt_350m(max_position_embeddings=1024, checkpoint=False, dtype=None):
     model_kwargs = dict(
         max_position_embeddings=max_position_embeddings,
         hidden_size=1024,
@@ -451,11 +437,12 @@ def opt_350m(max_position_embeddings=1024, checkpoint=False):
         num_hidden_layers=24,
         num_attention_heads=16,
         gradient_checkpointing=checkpoint,
+        dtype=dtype,
     )
     return OPT(**model_kwargs)
 
 
-def opt_1b(max_position_embeddings=1024, checkpoint=False):
+def opt_1b(max_position_embeddings=1024, checkpoint=False, dtype=None):
     model_kwargs = dict(
         max_position_embeddings=max_position_embeddings,
         hidden_size=2048,
@@ -463,11 +450,12 @@ def opt_1b(max_position_embeddings=1024, checkpoint=False):
         num_hidden_layers=24,
         num_attention_heads=32,
         gradient_checkpointing=checkpoint,
+        dtype=dtype,
     )
     return OPT(**model_kwargs)
 
 
-def opt_3b(max_position_embeddings=1024, checkpoint=False):
+def opt_3b(max_position_embeddings=1024, checkpoint=False, dtype=None):
     model_kwargs = dict(
         max_position_embeddings=max_position_embeddings,
         hidden_size=2560,
@@ -475,11 +463,12 @@ def opt_3b(max_position_embeddings=1024, checkpoint=False):
         num_hidden_layers=32,
         num_attention_heads=32,
         gradient_checkpointing=checkpoint,
+        dtype=dtype,
     )
     return OPT(**model_kwargs)
 
 
-def opt_6b(max_position_embeddings=1024, checkpoint=False):
+def opt_6b(max_position_embeddings=1024, checkpoint=False, dtype=None):
     model_kwargs = dict(
         max_position_embeddings=max_position_embeddings,
         hidden_size=4096,
@@ -487,11 +476,12 @@ def opt_6b(max_position_embeddings=1024, checkpoint=False):
         num_hidden_layers=32,
         num_attention_heads=32,
         gradient_checkpointing=checkpoint,
+        dtype=dtype,
     )
     return OPT(**model_kwargs)
 
 
-def opt_13b(max_position_embeddings=1024, checkpoint=True):
+def opt_13b(max_position_embeddings=1024, checkpoint=True, dtype=None):
     model_kwargs = dict(
         max_position_embeddings=max_position_embeddings,
         hidden_size=5120,
@@ -499,11 +489,12 @@ def opt_13b(max_position_embeddings=1024, checkpoint=True):
         num_hidden_layers=40,
         num_attention_heads=64,
         gradient_checkpointing=checkpoint,
+        dtype=dtype,
     )
     return OPT(**model_kwargs)
 
 
-def opt_30b(max_position_embeddings=1024, checkpoint=True):
+def opt_30b(max_position_embeddings=1024, checkpoint=True, dtype=None):
     model_kwargs = dict(
         max_position_embeddings=max_position_embeddings,
         hidden_size=7168,
@@ -511,11 +502,12 @@ def opt_30b(max_position_embeddings=1024, checkpoint=True):
         num_hidden_layers=48,
         num_attention_heads=64,
         gradient_checkpointing=checkpoint,
+        dtype=dtype,
     )
     return OPT(**model_kwargs)
 
 
-def opt_66b(max_position_embeddings=1024, checkpoint=True):
+def opt_66b(max_position_embeddings=1024, checkpoint=True, dtype=None):
     model_kwargs = dict(
         max_position_embeddings=max_position_embeddings,
         hidden_size=9216,
@@ -523,11 +515,12 @@ def opt_66b(max_position_embeddings=1024, checkpoint=True):
         num_hidden_layers=64,
         num_attention_heads=64,
         gradient_checkpointing=checkpoint,
+        dtype=dtype,
     )
     return OPT(**model_kwargs)
 
 
-def opt_175b(max_position_embeddings=1024, checkpoint=True):
+def opt_175b(max_position_embeddings=1024, checkpoint=True, dtype=None):
     model_kwargs = dict(
         max_position_embeddings=max_position_embeddings,
         hidden_size=12288,
@@ -535,6 +528,7 @@ def opt_175b(max_position_embeddings=1024, checkpoint=True):
         num_hidden_layers=96,
         num_attention_heads=128,
         gradient_checkpointing=checkpoint,
+        dtype=dtype,
     )
     return OPT(**model_kwargs)
 
@@ -542,10 +536,34 @@ def opt_175b(max_position_embeddings=1024, checkpoint=True):
 def build_model(args):
     logger = get_logger()
     model_func = globals()[args.model_name]
-    model = model_func(max_position_embeddings=args.seq_length, checkpoint=args.use_activation_checkpoint)
+    model = model_func(max_position_embeddings=args.seq_length,
+                       checkpoint=args.use_activation_checkpoint,
+                       dtype=torch.float16 if args.use_mixed_precision and args.use_amp_opt_level_3 else None)
 
     if pm.DATA.world_size > 1:
-        model = DDP(model, process_group=pm.DATA.group)
+        if args.use_fully_sharded_data_parallel:
+            logger.info("Using fully sharded data parallel")
+            # model = FSDP(model,
+            #              process_group=pm.DATA.group,
+            #              process_group_reduce_scatter=pm.DATA.group,
+            #              reshard_after_forward=True,
+            #              mixed_precision=args.use_mixed_precision)
+            model = FSDP(model,
+                         process_group=pm.DATA.group,
+                         sharding_strategy=ShardingStrategy.FULL_SHARD,
+                         mixed_precision=MixedPrecision(
+                             param_dtype=torch.float16 if args.use_mixed_precision else torch.float32,
+                             reduce_dtype=torch.float16 if args.use_mixed_precision else torch.float32,
+                             buffer_dtype=torch.float16 if args.use_mixed_precision else torch.float32),
+                         device_id=get_current_device(),
+                         auto_wrap_policy=partial(transformer_auto_wrap_policy,
+                                                  transformer_layer_cls={OPTDecoderLayer}))
+        else:
+            model = DDP(model, process_group=pm.DATA.group)
+    else:
+        args.use_fully_sharded_data_parallel = False
+
+    model = model.to(get_current_device())
 
     logger.info("Model is built.")
     return model
@@ -569,6 +587,7 @@ def build_data(args):
 
     if args.micro_batch_size is None:
         args.micro_batch_size = args.global_batch_size // pm.DATA.world_size
+    logger.info(f"Using global batch size = {args.global_batch_size}, micro batch size = {args.micro_batch_size}.")
 
     train_data = get_dataloader(
         dataset=dataset["train"],
@@ -601,7 +620,7 @@ def build_criterion():
 
 def build_optimizer(args, params):
     logger = get_logger()
-    optimizer = torch.optim.AdamW(params, lr=args.learning_rate, weight_decay=args.weight_decay)
+    optimizer = torch.optim.SGD(params, lr=args.learning_rate, weight_decay=args.weight_decay)
     logger.info("Optimizer is built.")
     return optimizer
 
@@ -617,7 +636,7 @@ def build_scheduler(args, n_steps, optimizer):
     return lr_scheduler
 
 
-def build_gpt2(args):
+def build_opt(args):
     model = build_model(args)
 
     train_data, test_data = build_data(args)
@@ -626,8 +645,8 @@ def build_gpt2(args):
 
     optimizer = build_optimizer(args, model.parameters())
     n_steps = len(train_data)
-    if args.steps_per_epoch is not None and args.steps_per_epoch < n_steps:
-        n_steps = args.steps_per_epoch
+    if args.steps_per_epoch is not None:
+        n_steps = min(args.steps_per_epoch, n_steps)
     lr_scheduler = build_scheduler(args, n_steps, optimizer)
 
     return model, train_data, test_data, criterion, metric, optimizer, lr_scheduler

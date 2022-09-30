@@ -11,32 +11,27 @@ from cubework.distributed import ParallelManager as pm
 from cubework.distributed import broadcast
 from cubework.distributed.collective import all_reduce
 from cubework.global_vars import env
-from cubework.utils import get_current_device, seed
+from cubework.utils import seed
 from torch import Tensor
 from torch.nn import Parameter
 
 from .. import init
 from ..utils import set_tensor_parallel_attribute_by_partition, to_2tuple
-from ._operation import summa_AB, summa_ABT, add_bias_2d, classifier_2d, layernorm_2d
-from ._utils import (
-    all_gather_tensor_2d,
-    assert_summa_initialization,
-    get_summa_dim_from_env,
-    reduce_scatter_tensor_2d,
-    split_batch_2d,
-)
+from ._operation import add_bias_2d, classifier_2d, layernorm_2d, summa_AB, summa_ABT
+from ._utils import (all_gather_tensor_2d, assert_summa_initialization, get_summa_dim_from_env,
+                     reduce_scatter_tensor_2d, split_batch_2d)
 
 
 class Linear2D(nn.Module):
+
     def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        bias: bool = True,
-        dtype: torch.dtype = None,
-        skip_bias_add: bool = False,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+            self,
+            in_features: int,
+            out_features: int,
+            bias: bool = True,
+            skip_bias_add: bool = False,
+            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
     ):
         super().__init__()
 
@@ -55,14 +50,11 @@ class Linear2D(nn.Module):
         self.hidden_size_per_partition = self.out_features // self.summa_dim
 
         # create weight, shape: [k/q, h/q]
-        factory_kwargs = {"device": get_current_device(), "dtype": dtype}
-        self.weight = Parameter(
-            torch.empty(self.input_size_per_partition, self.hidden_size_per_partition, **factory_kwargs)
-        )
+        self.weight = Parameter(torch.empty(self.input_size_per_partition, self.hidden_size_per_partition))
 
         # create bias, shape: [h/q]
         if bias:
-            self.bias = Parameter(torch.empty(self.out_features // self.summa_dim**2, **factory_kwargs))
+            self.bias = Parameter(torch.empty(self.out_features // self.summa_dim**2))
         else:
             self.register_parameter("bias", None)
 
@@ -85,7 +77,7 @@ class Linear2D(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         # input: [m/q, n/q, k/q]
         # output: [m/q, n/q, h/q]
-        out_shape = x.shape[:-1] + (self.hidden_size_per_partition,)
+        out_shape = x.shape[:-1] + (self.hidden_size_per_partition, )
 
         output = summa_AB(
             x,
@@ -120,7 +112,8 @@ class Linear2D(nn.Module):
 
 
 class LayerNorm2D(nn.Module):
-    def __init__(self, normalized_shape: int, eps: float = 1e-05, dtype=None):
+
+    def __init__(self, normalized_shape: int, eps: float = 1e-05):
         super().__init__()
 
         # layer norm config
@@ -137,10 +130,8 @@ class LayerNorm2D(nn.Module):
         self.partitioned_partition = normalized_shape // self.summa_dim**2
 
         # create parameters
-        factory_kwargs = {"device": get_current_device(), "dtype": dtype}
-
-        self.weight = Parameter(torch.ones(self.partitioned_partition, **factory_kwargs))
-        self.bias = Parameter(torch.zeros(self.partitioned_partition, **factory_kwargs))
+        self.weight = Parameter(torch.ones(self.partitioned_partition))
+        self.bias = Parameter(torch.zeros(self.partitioned_partition))
 
         self._set_tensor_parallel_attributes()
 
@@ -181,17 +172,17 @@ class LayerNorm2D(nn.Module):
 
 
 class PatchEmbedding2D(nn.Module):
+
     def __init__(
-        self,
-        img_size: int,
-        patch_size: int,
-        in_chans: int,
-        embed_size: int,
-        flatten: bool = True,
-        dtype: torch.dtype = None,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
-        position_embed_initializer: Callable = init.zeros_(),
+            self,
+            img_size: int,
+            patch_size: int,
+            in_chans: int,
+            embed_size: int,
+            flatten: bool = True,
+            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+            position_embed_initializer: Callable = init.zeros_(),
     ):
         super().__init__()
         img_size = to_2tuple(img_size)
@@ -207,21 +198,11 @@ class PatchEmbedding2D(nn.Module):
         self.embed_size = embed_size
         self.embed_size_per_partition = embed_size // (self.summa_dim**2)
 
-        self.weight = Parameter(
-            torch.empty(
-                (self.embed_size_per_partition, in_chans, *self.patch_size), device=get_current_device(), dtype=dtype
-            )
-        )
-        self.bias = Parameter(torch.empty(self.embed_size_per_partition, device=get_current_device(), dtype=dtype))
+        self.weight = Parameter(torch.empty((self.embed_size_per_partition, in_chans, *self.patch_size)))
+        self.bias = Parameter(torch.empty(self.embed_size_per_partition))
 
-        self.cls_token = Parameter(
-            torch.zeros((1, 1, self.embed_size_per_partition), device=get_current_device(), dtype=dtype)
-        )
-        self.pos_embed = Parameter(
-            torch.zeros(
-                (1, self.num_patches + 1, self.embed_size_per_partition), device=get_current_device(), dtype=dtype
-            )
-        )
+        self.cls_token = Parameter(torch.zeros((1, 1, self.embed_size_per_partition)))
+        self.pos_embed = Parameter(torch.zeros((1, self.num_patches + 1, self.embed_size_per_partition)))
 
         self.reset_parameters(weight_initializer, bias_initializer, position_embed_initializer)
         self._set_tensor_parallel_attribute()
@@ -244,9 +225,8 @@ class PatchEmbedding2D(nn.Module):
         input_ = split_batch_2d(input_)
 
         B, C, H, W = input_.shape
-        assert (
-            H == self.img_size[0] and W == self.img_size[1]
-        ), f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
+        assert (H == self.img_size[0] and W == self.img_size[1]
+                ), f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
 
         weight = all_gather_tensor_2d(self.weight, 0, pm.PARALLEL_2D_COL)
         bias = all_gather_tensor_2d(self.bias, 0, pm.PARALLEL_2D_COL)
@@ -265,15 +245,15 @@ class PatchEmbedding2D(nn.Module):
 
 
 class Embedding2D(nn.Module):
+
     def __init__(
-        self,
-        num_embeddings: int,
-        embedding_dim: int,
-        padding_idx: int = None,
-        dtype: torch.dtype = None,
-        weight_initializer: Callable = init.normal_(),
-        *args,
-        **kwargs,
+            self,
+            num_embeddings: int,
+            embedding_dim: int,
+            padding_idx: int = None,
+            weight_initializer: Callable = init.normal_(),
+            *args,
+            **kwargs,
     ):
         super().__init__()
 
@@ -287,9 +267,7 @@ class Embedding2D(nn.Module):
         self.embed_args = args
         self.embed_kwargs = kwargs
 
-        self.weight = Parameter(
-            torch.empty((num_embeddings, embed_dim_per_partition), device=get_current_device(), dtype=dtype)
-        )
+        self.weight = Parameter(torch.empty((num_embeddings, embed_dim_per_partition)))
 
         self.reset_parameters(weight_initializer)
         self._set_tensor_parallel_attributes()
@@ -318,15 +296,15 @@ class Embedding2D(nn.Module):
 
 
 class VocabParallelEmbedding2D(nn.Module):
+
     def __init__(
-        self,
-        num_embeddings: int,
-        embedding_dim: int,
-        padding_idx: int = None,
-        dtype: torch.dtype = None,
-        weight_initializer: Callable = init.normal_(),
-        *args,
-        **kwargs,
+            self,
+            num_embeddings: int,
+            embedding_dim: int,
+            padding_idx: int = None,
+            weight_initializer: Callable = init.normal_(),
+            *args,
+            **kwargs,
     ):
         super().__init__()
         self.num_embeddings = num_embeddings
@@ -343,13 +321,7 @@ class VocabParallelEmbedding2D(nn.Module):
         self.vocab_start_index = tensor_parallel_rank * self.num_embeddings_per_partition
         self.vocab_end_index = self.vocab_start_index + self.num_embeddings_per_partition
 
-        self.weight = Parameter(
-            torch.empty(
-                (self.num_embeddings_per_partition, self.embed_dim_per_partition),
-                device=get_current_device(),
-                dtype=dtype,
-            )
-        )
+        self.weight = Parameter(torch.empty((self.num_embeddings_per_partition, self.embed_dim_per_partition)))
 
         self.reset_parameters(weight_initializer)
         self._set_tensor_parallel_attributes()
@@ -365,11 +337,8 @@ class VocabParallelEmbedding2D(nn.Module):
             self._fill_padding_idx_with_zero()
 
     def _fill_padding_idx_with_zero(self) -> None:
-        if (
-            self.padding_idx is not None
-            and self.padding_idx >= self.vocab_start_index
-            and self.padding_idx < self.vocab_end_index
-        ):
+        if (self.padding_idx is not None and self.padding_idx >= self.vocab_start_index
+                and self.padding_idx < self.vocab_end_index):
             with torch.no_grad():
                 self.weight[self.padding_idx - self.vocab_start_index].fill_(0)
 
@@ -378,9 +347,8 @@ class VocabParallelEmbedding2D(nn.Module):
         masked_input = input_.clone() - self.vocab_start_index
         masked_input[input_mask] = 0
 
-        output_parallel = F.embedding(
-            masked_input, self.weight, self.padding_idx, *self.embed_args, **self.embed_kwargs
-        )
+        output_parallel = F.embedding(masked_input, self.weight, self.padding_idx, *self.embed_args,
+                                      **self.embed_kwargs)
 
         output_parallel[input_mask, :] = 0.0
         output = reduce_scatter_tensor_2d(output_parallel, 0, pm.PARALLEL_2D_COL)
@@ -388,15 +356,15 @@ class VocabParallelEmbedding2D(nn.Module):
 
 
 class Classifier2D(nn.Module):
+
     def __init__(
-        self,
-        in_features: int,
-        num_classes: int,
-        weight: Parameter = None,
-        bias: bool = True,
-        dtype: torch.dtype = None,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+            self,
+            in_features: int,
+            num_classes: int,
+            weight: Parameter = None,
+            bias: bool = True,
+            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
     ):
         super().__init__()
         self.in_features = in_features
@@ -413,12 +381,10 @@ class Classifier2D(nn.Module):
             self.weight = weight
             self.has_weight = False
         else:
-            self.weight = Parameter(
-                torch.empty(self.num_classes, self.input_size_per_partition, device=get_current_device(), dtype=dtype)
-            )
+            self.weight = Parameter(torch.empty(self.num_classes, self.input_size_per_partition))
             self.has_weight = True
         if bias:
-            self.bias = Parameter(torch.zeros(self.num_classes, device=get_current_device(), dtype=dtype))
+            self.bias = Parameter(torch.zeros(self.num_classes))
         else:
             self.bias = None
 
@@ -444,7 +410,7 @@ class Classifier2D(nn.Module):
                 broadcast(self.bias, row_src_rank, pm.PARALLEL_2D_ROW)
 
     def forward(self, input_: Tensor) -> Tensor:
-        out_shape = input_.shape[:-1] + (self.num_classes,)
+        out_shape = input_.shape[:-1] + (self.num_classes, )
 
         return classifier_2d(
             input_,
@@ -458,15 +424,15 @@ class Classifier2D(nn.Module):
 
 
 class VocabParallelClassifier2D(nn.Module):
+
     def __init__(
-        self,
-        in_features: int,
-        num_classes: int,
-        weight: Parameter = None,
-        bias: bool = True,
-        dtype: torch.dtype = None,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+            self,
+            in_features: int,
+            num_classes: int,
+            weight: Parameter = None,
+            bias: bool = True,
+            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
     ):
         super().__init__()
 
@@ -484,18 +450,15 @@ class VocabParallelClassifier2D(nn.Module):
         self.output_size_per_partition = num_classes // self.summa_dim
 
         # create weight, shape: [k/q, h/q]
-        factory_kwargs = {"device": get_current_device(), "dtype": dtype}
         if weight is not None:
             self.weight = weight
             self.has_weight = False
         else:
-            self.weight = Parameter(
-                torch.empty(self.output_size_per_partition, self.input_size_per_partition, **factory_kwargs)
-            )
+            self.weight = Parameter(torch.empty(self.output_size_per_partition, self.input_size_per_partition))
             self.has_weight = True
         # create bias, shape: [h/q]
         if bias:
-            self.bias = Parameter(torch.empty(self.num_classes // self.summa_dim**2, **factory_kwargs))
+            self.bias = Parameter(torch.empty(self.num_classes // self.summa_dim**2))
         else:
             self.bias = None
 
@@ -521,7 +484,7 @@ class VocabParallelClassifier2D(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         # input: [m/q, n/q, k/q]
         # output: [m/q, n/q, h/q]
-        out_shape = x.shape[:-1] + (self.output_size_per_partition,)
+        out_shape = x.shape[:-1] + (self.output_size_per_partition, )
 
         output = summa_ABT(
             x,

@@ -7,7 +7,7 @@ import torch
 from cubework.distributed import ParallelManager as pm
 from cubework.utils import get_current_device, get_dataloader, get_logger
 from datasets import load_from_disk
-from torch import dtype, nn
+from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import GPT2Tokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
@@ -22,20 +22,18 @@ class GPT2Embedding(nn.Module):
         max_position_embeddings: int,
         padding_idx: int = None,
         dropout: float = 0.0,
-        dtype: dtype = None,
     ) -> None:
         super().__init__()
         self.word_embeddings = cube_nn.Embedding(vocab_size,
                                                  embedding_size,
                                                  vocab_parallel=True,
-                                                 padding_idx=padding_idx,
-                                                 dtype=dtype)
-        self.position_embeddings = cube_nn.Embedding(max_position_embeddings, embedding_size, dtype=dtype)
+                                                 padding_idx=padding_idx)
+        self.position_embeddings = cube_nn.Embedding(max_position_embeddings, embedding_size)
         self.dropout = cube_nn.Dropout(dropout)
 
     def forward(self, input_ids):
         seq_length = input_ids.size(1)
-        position_ids = torch.arange(seq_length, dtype=torch.long, device=get_current_device()).unsqueeze(0)
+        position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device).unsqueeze(0)
         x = self.word_embeddings(input_ids) + self.position_embeddings(position_ids)
         x = self.dropout(x)
 
@@ -55,15 +53,14 @@ class GPT2SelfAttention(nn.Module):
         attention_dropout: float,
         dropout: float,
         bias: bool = True,
-        dtype: dtype = None,
     ) -> None:
         super().__init__()
         self.attention_head_size = hidden_size // num_heads
         self.max_positions = max_positions
-        self.query_key_value = cube_nn.Linear(hidden_size, 3 * hidden_size, dtype=dtype, bias=bias)
+        self.query_key_value = cube_nn.Linear(hidden_size, 3 * hidden_size, bias=bias)
         self.softmax = nn.Softmax(dim=-1)
         self.attention_dropout = cube_nn.Dropout(attention_dropout)
-        self.dense = cube_nn.Linear(hidden_size, hidden_size, dtype=dtype, bias=True)
+        self.dense = cube_nn.Linear(hidden_size, hidden_size, bias=True)
         self.dropout = cube_nn.Dropout(dropout)
 
     def forward(self, x, attention_mask=None):
@@ -107,13 +104,12 @@ class GPT2MLP(nn.Module):
         intermediate_size: int,
         activation: Callable,
         dropout: float,
-        dtype: dtype = None,
         bias: bool = True,
     ):
         super().__init__()
-        self.dense_1 = cube_nn.Linear(hidden_size, intermediate_size, dtype=dtype, bias=bias)
+        self.dense_1 = cube_nn.Linear(hidden_size, intermediate_size, bias=bias)
         self.activation = activation
-        self.dense_2 = cube_nn.Linear(intermediate_size, hidden_size, dtype=dtype, bias=bias)
+        self.dense_2 = cube_nn.Linear(intermediate_size, hidden_size, bias=bias)
         self.dropout = cube_nn.Dropout(dropout)
 
     def forward(self, x):
@@ -132,16 +128,9 @@ class GPT2LMHead(nn.Module):
         vocab_size: int,
         word_embeeding_weight: nn.Parameter = None,
         bias: bool = False,
-        dtype: dtype = None,
     ) -> None:
         super().__init__()
-        self.dense = cube_nn.Classifier(
-            hidden_size,
-            vocab_size,
-            weight=word_embeeding_weight,
-            bias=bias,
-            dtype=dtype,
-        )
+        self.dense = cube_nn.Classifier(hidden_size, vocab_size, weight=word_embeeding_weight, bias=bias)
 
     def forward(self, x):
         x = self.dense(x)
@@ -160,7 +149,6 @@ class GPT2Block(nn.Module):
         attention_dropout: float,
         dropout: float,
         layernorm_epsilon: float = 1e-5,
-        dtype: dtype = None,
         bias: bool = True,
         apply_post_layernorm: bool = False,
         checkpoint: bool = False,
@@ -168,25 +156,19 @@ class GPT2Block(nn.Module):
         super().__init__()
         self.checkpoint = checkpoint
         self.apply_post_layernorm = apply_post_layernorm
-        self.norm1 = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon, dtype=dtype)
-        self.attn = GPT2SelfAttention(
-            hidden_size=hidden_size,
-            num_heads=num_heads,
-            max_positions=max_positions,
-            attention_dropout=attention_dropout,
-            dropout=dropout,
-            bias=bias,
-            dtype=dtype,
-        )
-        self.norm2 = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon, dtype=dtype)
-        self.mlp = GPT2MLP(
-            hidden_size=hidden_size,
-            intermediate_size=intermediate_size,
-            activation=activation,
-            dropout=dropout,
-            dtype=dtype,
-            bias=bias,
-        )
+        self.norm1 = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon)
+        self.attn = GPT2SelfAttention(hidden_size=hidden_size,
+                                      num_heads=num_heads,
+                                      max_positions=max_positions,
+                                      attention_dropout=attention_dropout,
+                                      dropout=dropout,
+                                      bias=bias)
+        self.norm2 = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon)
+        self.mlp = GPT2MLP(hidden_size=hidden_size,
+                           intermediate_size=intermediate_size,
+                           activation=activation,
+                           dropout=dropout,
+                           bias=bias)
 
     def _forward(self, x, attention_mask=None):
         if not self.apply_post_layernorm:
@@ -241,20 +223,16 @@ class GPT2(nn.Module):
         layernorm_epsilon: float = 1e-5,
         activation: Callable = nn.functional.gelu,
         padding_idx: int = None,
-        dtype: dtype = None,
         bias: bool = True,
         apply_post_layernorm: bool = False,
         checkpoint: bool = False,
     ) -> None:
         super().__init__()
-        self.embed = GPT2Embedding(
-            embedding_size=hidden_size,
-            vocab_size=vocab_size,
-            max_position_embeddings=max_position_embeddings,
-            padding_idx=padding_idx,
-            dropout=embedding_dropout,
-            dtype=dtype,
-        )
+        self.embed = GPT2Embedding(embedding_size=hidden_size,
+                                   vocab_size=vocab_size,
+                                   max_position_embeddings=max_position_embeddings,
+                                   padding_idx=padding_idx,
+                                   dropout=embedding_dropout)
         self.blocks = nn.ModuleList([
             GPT2Block(
                 hidden_size=hidden_size,
@@ -265,21 +243,17 @@ class GPT2(nn.Module):
                 attention_dropout=attention_dropout,
                 dropout=dropout,
                 layernorm_epsilon=layernorm_epsilon,
-                dtype=dtype,
                 bias=bias,
                 apply_post_layernorm=apply_post_layernorm,
                 checkpoint=checkpoint,
             ) for _ in range(depth)
         ])
 
-        self.norm = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon, dtype=dtype)
+        self.norm = cube_nn.LayerNorm(normalized_shape=hidden_size, eps=layernorm_epsilon)
 
-        self.head = GPT2LMHead(
-            hidden_size=hidden_size,
-            vocab_size=vocab_size,
-            word_embeeding_weight=self.embed.word_embeddings.weight,
-            dtype=dtype,
-        )
+        self.head = GPT2LMHead(hidden_size=hidden_size,
+                               vocab_size=vocab_size,
+                               word_embeeding_weight=self.embed.word_embeddings.weight)
 
     def forward(self, input_ids, attention_mask):
         x = self.embed(input_ids)
@@ -403,6 +377,7 @@ def build_model(args):
     logger = get_logger()
     model_func = globals()[args.model_name]
     model = model_func(max_position_embeddings=args.seq_length, checkpoint=args.use_activation_checkpoint)
+    model = model.to(get_current_device())
 
     if pm.DATA.world_size > 1:
         model = DDP(model, process_group=pm.DATA.group)
@@ -429,6 +404,7 @@ def build_data(args):
 
     if args.micro_batch_size is None:
         args.micro_batch_size = args.global_batch_size // pm.DATA.world_size
+    logger.info(f"Using global batch size = {args.global_batch_size}, micro batch size = {args.micro_batch_size}.")
 
     train_data = get_dataloader(
         dataset=dataset["train"],
@@ -486,8 +462,8 @@ def build_gpt2(args):
 
     optimizer = build_optimizer(args, model.parameters())
     n_steps = len(train_data)
-    if args.steps_per_epoch is not None and args.steps_per_epoch < n_steps:
-        n_steps = args.steps_per_epoch
+    if args.steps_per_epoch is not None:
+        n_steps = min(args.steps_per_epoch, n_steps)
     lr_scheduler = build_scheduler(args, n_steps, optimizer)
 
     return model, train_data, test_data, criterion, metric, optimizer, lr_scheduler

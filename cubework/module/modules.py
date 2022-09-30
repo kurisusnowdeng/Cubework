@@ -3,11 +3,10 @@ from typing import Callable
 
 from cubework.distributed import ParallelManager as pm
 from cubework.global_vars import env
-from cubework.utils import get_current_device, seed
-from torch import dtype, nn
+from cubework.utils import seed
+from torch import nn
 
 from . import init as init
-from ._entry_module import CubeModule
 from .module_std import ClassifierSTD, DropPath, PatchEmbeddingSTD
 from .parallel_1d import (Classifier1D, Dropout1D, Embedding1D, LayerNorm1D, Linear1D, PatchEmbedding1D,
                           VocabParallelClassifier1D, VocabParallelEmbedding1D)
@@ -65,6 +64,8 @@ _parallel_split_batch = {
     "3d": split_batch_3d,
 }
 
+DropPath = DropPath
+
 
 def partition_batch(input_):
     tensor_parallel_mode = get_tensor_parallel_mode()
@@ -79,162 +80,217 @@ def partition_batch(input_):
         return input_
 
 
-class LayerNorm(CubeModule):
+class LayerNorm(nn.Module):
 
-    def __init__(self, normalized_shape: int, eps=1e-05, dtype=None) -> None:
+    def __init__(self, normalized_shape: int, eps=1e-05, dtype=None):
+        super().__init__()
         tensor_parallel = get_tensor_parallel_mode()
         if tensor_parallel is None:
-            norm = nn.LayerNorm(normalized_shape, eps=eps).to(dtype).to(get_current_device())
+            self.norm = nn.LayerNorm(normalized_shape, eps=eps)
         else:
-            norm = _parallel_layernorm[tensor_parallel](normalized_shape, eps=eps, dtype=dtype)
-        super().__init__(norm)
+            self.norm = _parallel_layernorm[tensor_parallel](normalized_shape, eps=eps)
+        self.norm = self.norm.to(dtype)
+
+    def forward(self, *args, **kwargs):
+        return self.norm(*args, **kwargs)
+
+    @property
+    def weight(self):
+        return self.norm.weight
+
+    @property
+    def bias(self):
+        return self.norm.bias
 
 
-class Linear(CubeModule):
+class Linear(nn.Module):
 
     def __init__(self,
                  in_features: int,
                  out_features: int,
                  bias: bool = True,
-                 dtype: dtype = None,
+                 dtype=None,
                  weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
                  bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
-                 **kwargs) -> None:
+                 **kwargs):
+        super().__init__()
         tensor_parallel = get_tensor_parallel_mode()
         if tensor_parallel is None:
-            layer = nn.Linear(in_features, out_features, bias=bias).to(dtype).to(get_current_device())
-            weight_initializer(layer.weight, fan_in=in_features, fan_out=out_features)
-            if layer.bias is not None:
-                bias_initializer(layer.bias, fan_in=in_features)
+            self.linear = nn.Linear(in_features, out_features, bias=bias)
+            weight_initializer(self.linear.weight, fan_in=in_features, fan_out=out_features)
+            if self.linear.bias is not None:
+                bias_initializer(self.linear.bias, fan_in=in_features)
         else:
-            layer = _parallel_linear[tensor_parallel](
+            self.linear = _parallel_linear[tensor_parallel](
                 in_features,
                 out_features,
                 bias=bias,
-                dtype=dtype,
                 weight_initializer=weight_initializer,
                 bias_initializer=bias_initializer,
                 **kwargs,
             )
-        super().__init__(layer)
+        self.linear = self.linear.to(dtype)
+
+    def forward(self, *args, **kwargs):
+        return self.linear(*args, **kwargs)
+
+    @property
+    def weight(self):
+        return self.linear.weight
+
+    @property
+    def bias(self):
+        return self.linear.bias
 
 
-class Classifier(CubeModule):
+class Classifier(nn.Module):
 
     def __init__(self,
                  in_features: int,
                  num_classes: int,
                  weight: nn.Parameter = None,
                  bias: bool = True,
-                 dtype: dtype = None,
+                 dtype=None,
                  weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
                  bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1)):
+        super().__init__()
         tensor_parallel = get_tensor_parallel_mode()
         vocab_parallel = env.vocab_parallel
         if vocab_parallel:
-            layer = _vocab_parallel_classifier[tensor_parallel](
+            self.linear = _vocab_parallel_classifier[tensor_parallel](
                 in_features,
                 num_classes,
                 weight=weight,
                 bias=bias,
-                dtype=dtype,
                 weight_initializer=weight_initializer,
                 bias_initializer=bias_initializer,
             )
         else:
-            layer = _parallel_classifier[tensor_parallel](
+            self.linear = _parallel_classifier[tensor_parallel](
                 in_features,
                 num_classes,
                 weight=weight,
                 bias=bias,
-                dtype=dtype,
                 weight_initializer=weight_initializer,
                 bias_initializer=bias_initializer,
             )
-        super().__init__(layer)
+        self.linear = self.linear.to(dtype)
+
+    def forward(self, *args, **kwargs):
+        return self.linear(*args, **kwargs)
+
+    @property
+    def weight(self):
+        return self.linear.weight
+
+    @property
+    def bias(self):
+        return self.linear.bias
 
 
-class Embedding(CubeModule):
+class Embedding(nn.Module):
 
     def __init__(self,
                  num_embeddings: int,
                  embedding_dim: int,
                  vocab_parallel: bool = False,
                  padding_idx: int = None,
-                 dtype: dtype = None,
+                 dtype=None,
                  weight_initializer: Callable = init.normal_(),
                  *args,
-                 **kwargs) -> None:
+                 **kwargs):
+        super().__init__()
         tensor_parallel = get_tensor_parallel_mode()
         if tensor_parallel is None:
-            embed = nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx, *args,
-                                 **kwargs).to(dtype).to(get_current_device())
-            weight_initializer(embed.weight, fan_in=num_embeddings, fan_out=embedding_dim)
+            self.embed = nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx, *args, **kwargs)
+            weight_initializer(self.embed.weight, fan_in=num_embeddings, fan_out=embedding_dim)
         elif vocab_parallel:
-            embed = _vocab_parallel_embedding[tensor_parallel](
+            self.embed = _vocab_parallel_embedding[tensor_parallel](
                 num_embeddings,
                 embedding_dim,
                 padding_idx=padding_idx,
-                dtype=dtype,
                 weight_initializer=weight_initializer,
                 *args,
                 **kwargs,
             )
         else:
-            embed = _parallel_embedding[tensor_parallel](
+            self.embed = _parallel_embedding[tensor_parallel](
                 num_embeddings,
                 embedding_dim,
                 padding_idx=padding_idx,
-                dtype=dtype,
                 weight_initializer=weight_initializer,
                 *args,
                 **kwargs,
             )
-        super().__init__(embed)
+        self.embed = self.embed.to(dtype)
+
+    def forward(self, *args, **kwargs):
+        return self.embed(*args, **kwargs)
+
+    @property
+    def weight(self):
+        return self.embed.weight
 
 
-class PatchEmbedding(CubeModule):
+class PatchEmbedding(nn.Module):
 
-    def __init__(
-            self,
-            img_size: int,
-            patch_size: int,
-            in_chans: int,
-            embed_size: int,
-            dtype: dtype = None,
-            flatten: bool = True,
-            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
-            position_embed_initializer: Callable = init.zeros_(),
-    ):
+    def __init__(self,
+                 img_size: int,
+                 patch_size: int,
+                 in_chans: int,
+                 embed_size: int,
+                 flatten: bool = True,
+                 dtype=None,
+                 weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+                 bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+                 position_embed_initializer: Callable = init.zeros_()):
+        super().__init__()
         tensor_parallel = get_tensor_parallel_mode()
-        embed = _parallel_patchembedding[tensor_parallel](
+        self.embed = _parallel_patchembedding[tensor_parallel](
             img_size,
             patch_size,
             in_chans,
             embed_size,
-            dtype=dtype,
             flatten=flatten,
             weight_initializer=weight_initializer,
             bias_initializer=bias_initializer,
             position_embed_initializer=position_embed_initializer,
         )
-        super().__init__(embed)
+        self.embed = self.embed.to(dtype)
+
+    def forward(self, *args, **kwargs):
+        return self.embed(*args, **kwargs)
+
+    @property
+    def weight(self):
+        return self.embed.weight
+
+    @property
+    def bias(self):
+        return self.embed.bias
+
+    @property
+    def cls_token(self):
+        return self.embed.cls_token
+
+    @property
+    def pos_embed(self):
+        return self.embed.pos_embed
 
 
-class Dropout(CubeModule):
+class Dropout(nn.Module):
 
-    def __init__(self, p: float = 0.5, inplace: bool = False) -> None:
-        tensor_parallel = get_tensor_parallel_mode()
-        if tensor_parallel == "1d":
-            drop = Dropout1D(p, inplace)
+    def __init__(self, p: float = 0.5, inplace: bool = False):
+        super().__init__()
+        self.tensor_parallel = get_tensor_parallel_mode()
+        if self.tensor_parallel == "1d":
+            self.drop = Dropout1D(p, inplace)
         else:
-            drop = nn.Dropout(p, inplace)
-        super().__init__(drop, tensor_parallel=tensor_parallel)
+            self.drop = nn.Dropout(p, inplace)
 
-    def forward(self, *args):
+    def forward(self, *args, **kwargs):
         if self.tensor_parallel in [None, "1d"]:
-            return self._forward_func(*args)
+            return self.drop(*args, **kwargs)
         else:
             with seed(pm.TENSOR):
-                return self._forward_func(*args)
+                return self.drop(*args, **kwargs)

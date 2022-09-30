@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from cubework.distributed import ParallelManager as pm
 from cubework.distributed import all_reduce, broadcast
 from cubework.global_vars import env
-from cubework.utils import get_current_device, seed
+from cubework.utils import seed
 from torch import Tensor
 from torch.nn import Parameter
 
@@ -21,7 +21,7 @@ from ._utils import (all_gather_weight_3d, get_depth_from_env, get_input_paralle
 
 class LayerNorm3D(nn.Module):
 
-    def __init__(self, normalized_shape: int, eps: float = 1e-12, dtype=None):
+    def __init__(self, normalized_shape: int, eps: float = 1e-12):
 
         super().__init__()
         self.input_parallel_mode = get_input_parallel_mode()
@@ -32,10 +32,8 @@ class LayerNorm3D(nn.Module):
         self.normalized_shape = normalized_shape
         self.normalized_shape_per_partition = normalized_shape // self.depth
 
-        self.weight = Parameter(
-            torch.ones(self.normalized_shape_per_partition, device=get_current_device(), dtype=dtype))
-        self.bias = Parameter(torch.zeros(self.normalized_shape_per_partition, device=get_current_device(),
-                                          dtype=dtype))
+        self.weight = Parameter(torch.ones(self.normalized_shape_per_partition))
+        self.bias = Parameter(torch.zeros(self.normalized_shape_per_partition))
         self.variance_epsilon = eps
         self.reset_parameters()
         self._set_tensor_parallel_attributes()
@@ -71,7 +69,6 @@ class Linear3D(nn.Module):
             in_features: int,
             out_features: int,
             bias: bool = True,
-            dtype: torch.dtype = None,
             weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
             bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
     ):
@@ -87,16 +84,12 @@ class Linear3D(nn.Module):
         self.out_features_per_partition = out_features // self.depth**2
         self.bias_features_per_partition = out_features // self.depth
 
-        self.weight = Parameter(
-            torch.empty(
-                self.in_features_per_partition,
-                self.out_features_per_partition,
-                device=get_current_device(),
-                dtype=dtype,
-            ))
+        self.weight = Parameter(torch.empty(
+            self.in_features_per_partition,
+            self.out_features_per_partition,
+        ))
         if bias:
-            self.bias = Parameter(
-                torch.zeros(self.bias_features_per_partition, device=get_current_device(), dtype=dtype))
+            self.bias = Parameter(torch.zeros(self.bias_features_per_partition))
         else:
             self.bias = None
 
@@ -141,7 +134,6 @@ class Classifier3D(nn.Module):
             num_classes: int,
             weight: Parameter = None,
             bias: bool = True,
-            dtype: torch.dtype = None,
             weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
             bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
     ):
@@ -158,11 +150,10 @@ class Classifier3D(nn.Module):
             self.weight = weight
             self.has_weight = False
         else:
-            self.weight = Parameter(
-                torch.empty(self.num_classes, self.in_features_per_partition, device=get_current_device(), dtype=dtype))
+            self.weight = Parameter(torch.empty(self.num_classes, self.in_features_per_partition))
             self.has_weight = True
         if bias:
-            self.bias = Parameter(torch.zeros(self.num_classes, device=get_current_device(), dtype=dtype))
+            self.bias = Parameter(torch.zeros(self.num_classes))
         else:
             self.bias = None
 
@@ -207,7 +198,6 @@ class VocabParallelClassifier3D(nn.Module):
             num_classes: int,
             weight: Parameter = None,
             bias: bool = True,
-            dtype: torch.dtype = None,
             weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
             bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
     ):
@@ -227,15 +217,10 @@ class VocabParallelClassifier3D(nn.Module):
             self.weight = weight
             self.has_weight = False
         else:
-            self.weight = Parameter(
-                torch.empty(self.out_features_per_partition,
-                            self.in_features_per_partition,
-                            device=get_current_device(),
-                            dtype=dtype))
+            self.weight = Parameter(torch.empty(self.out_features_per_partition, self.in_features_per_partition))
             self.has_weight = True
         if bias:
-            self.bias = Parameter(
-                torch.zeros(self.bias_features_per_partition, device=get_current_device(), dtype=dtype))
+            self.bias = Parameter(torch.zeros(self.bias_features_per_partition))
         else:
             self.bias = None
 
@@ -285,7 +270,6 @@ class PatchEmbedding3D(nn.Module):
             in_chans: int,
             embed_size: int,
             flatten: bool = True,
-            dtype: torch.dtype = None,
             weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
             bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
             position_embed_initializer: Callable = init.zeros_(),
@@ -296,23 +280,21 @@ class PatchEmbedding3D(nn.Module):
         self.weight_parallel_mode = get_weight_parallel_mode()
         self.output_parallel_mode = get_output_parallel_mode()
         self.input_x_weight_parallel_mode = get_input_x_weight_parallel_mode()
-        self.patch_size = to_2tuple(patch_size)
-        grid_size = to_2tuple(img_size // patch_size)
-        num_patches = grid_size[0] * grid_size[1]
+        img_size = to_2tuple(img_size)
+        patch_size = to_2tuple(patch_size)
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.grid_size = (img_size[0] // patch_size[0], img_size[1] // patch_size[1])
+        self.num_patches = self.grid_size[0] * self.grid_size[1]
         self.embed_size = embed_size
         embed_size_per_partition = embed_size // self.depth
         self.flatten = flatten
 
-        self.weight = nn.Parameter(
-            torch.empty((embed_size_per_partition, in_chans, *self.patch_size),
-                        device=get_current_device(),
-                        dtype=dtype))
-        self.bias = nn.Parameter(torch.empty(embed_size_per_partition, device=get_current_device(), dtype=dtype))
+        self.weight = nn.Parameter(torch.empty((embed_size_per_partition, in_chans, *self.patch_size)))
+        self.bias = nn.Parameter(torch.empty(embed_size_per_partition))
 
-        self.cls_token = nn.Parameter(
-            torch.zeros((1, 1, embed_size_per_partition), device=get_current_device(), dtype=dtype))
-        self.pos_embed = nn.Parameter(
-            torch.zeros((1, num_patches + 1, embed_size_per_partition), device=get_current_device(), dtype=dtype))
+        self.cls_token = nn.Parameter(torch.zeros((1, 1, embed_size_per_partition)))
+        self.pos_embed = nn.Parameter(torch.zeros((1, self.num_patches + 1, embed_size_per_partition)))
 
         self.reset_parameters(weight_initializer, bias_initializer, position_embed_initializer)
         self._set_tensor_parallel_attributes()
@@ -365,7 +347,6 @@ class Embedding3D(nn.Module):
                  num_embeddings: int,
                  embedding_dim: int,
                  padding_idx: int = None,
-                 dtype: torch.dtype = None,
                  weight_initializer: Callable = init.normal_(),
                  *args,
                  **kwargs):
@@ -383,8 +364,7 @@ class Embedding3D(nn.Module):
         self.embed_args = args
         self.embed_kwargs = kwargs
 
-        self.weight = nn.Parameter(
-            torch.empty((num_embeddings, embed_dim_per_partition), device=get_current_device(), dtype=dtype))
+        self.weight = nn.Parameter(torch.empty((num_embeddings, embed_dim_per_partition)))
 
         self.reset_parameters(weight_initializer)
         self._set_tensor_parallel_attributes()
@@ -424,7 +404,6 @@ class VocabParallelEmbedding3D(torch.nn.Module):
                  num_embeddings: int,
                  embedding_dim: int,
                  padding_idx: int = None,
-                 dtype: torch.dtype = None,
                  weight_initializer: Callable = init.normal_(),
                  *args,
                  **kwargs):
@@ -445,12 +424,7 @@ class VocabParallelEmbedding3D(torch.nn.Module):
         self.vocab_start_index = vocab_parallel_rank * self.num_embeddings_per_partition * self.depth
         self.vocab_end_index = self.vocab_start_index + self.num_embeddings_per_partition * self.depth
 
-        self.weight = Parameter(
-            torch.empty(
-                (self.num_embeddings_per_partition, self.embed_dim_per_partition),
-                device=get_current_device(),
-                dtype=dtype,
-            ))
+        self.weight = Parameter(torch.empty((self.num_embeddings_per_partition, self.embed_dim_per_partition)))
 
         self.reset_parameters(weight_initializer)
         self._set_tensor_parallel_attributes()

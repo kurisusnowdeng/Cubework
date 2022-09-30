@@ -11,78 +11,92 @@ import torch.nn.functional as F
 from cubework.distributed import ParallelManager as pm
 from cubework.distributed import broadcast
 from cubework.global_vars import env
-from cubework.utils import get_current_device, seed
+from cubework.utils import seed
 from torch import Tensor
 from torch.nn.parameter import Parameter
 
 from .. import init
-from .._entry_module import CubeModule
 from ..module_std import PatchEmbeddingSTD
 from ..utils import set_tensor_parallel_attribute_by_partition
-from ._utils import (
-    gather_forward_split_backward,
-    get_parallel_input,
-    reduce_grad,
-    reduce_input,
-    set_parallel_input,
-    split_forward_gather_backward,
-)
+from ._utils import (gather_forward_split_backward, get_parallel_input, reduce_grad, reduce_input, set_parallel_input,
+                     split_forward_gather_backward)
 
 
-class Linear1D(CubeModule):
+class Linear1D(nn.Module):
+
     def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        bias: bool = True,
-        dtype: torch.dtype = None,
-        gather_output: bool = False,
-        skip_bias_add: bool = False,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+            self,
+            in_features: int,
+            out_features: int,
+            bias: bool = True,
+            gather_output: bool = False,
+            skip_bias_add: bool = False,
+            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
     ):
+        super().__init__()
         parallel_input = get_parallel_input()
         if not parallel_input:
-            layer = Linear1D_Col(
+            self.linear = Linear1D_Col(
                 in_features,
                 out_features,
                 bias=bias,
-                dtype=dtype,
                 gather_output=gather_output,
                 skip_bias_add=skip_bias_add,
                 weight_initializer=weight_initializer,
                 bias_initializer=bias_initializer,
             )
         else:
-            layer = Linear1D_Row(
+            self.linear = Linear1D_Row(
                 in_features,
                 out_features,
                 bias=bias,
-                dtype=dtype,
                 parallel_input=parallel_input,
                 skip_bias_add=skip_bias_add,
                 weight_initializer=weight_initializer,
                 bias_initializer=bias_initializer,
             )
-        super().__init__(layer)
+
+    def forward(self, *args, **kwargs):
+        return self.linear(*args, **kwargs)
+
+    @property
+    def weight(self):
+        return self.linear.weight
+
+    @property
+    def bias(self):
+        return self.linear.bias
 
 
-class LayerNorm1D(CubeModule):
-    def __init__(self, normalized_shape: int, eps=1e-05, dtype=None):
-        norm = nn.LayerNorm(normalized_shape, eps=eps).to(dtype).to(get_current_device())
-        super().__init__(norm)
+class LayerNorm1D(nn.Module):
+
+    def __init__(self, normalized_shape: int, eps=1e-05):
+        super().__init__()
+        self.norm = nn.LayerNorm(normalized_shape, eps=eps)
+
+    def forward(self, *args, **kwargs):
+        return self.norm(*args, **kwargs)
+
+    @property
+    def weight(self):
+        return self.norm.weight
+
+    @property
+    def bias(self):
+        return self.norm.bias
 
 
 class Classifier1D(nn.Module):
+
     def __init__(
-        self,
-        in_features: int,
-        num_classes: int,
-        weight: Parameter = None,
-        bias: bool = True,
-        dtype: torch.dtype = None,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+            self,
+            in_features: int,
+            num_classes: int,
+            weight: Parameter = None,
+            bias: bool = True,
+            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
     ):
         super().__init__()
         self.in_features = in_features
@@ -94,15 +108,14 @@ class Classifier1D(nn.Module):
 
         # Parameters.
         # Initialize weight.
-        factory_kwargs = {"device": get_current_device(), "dtype": dtype}
         if weight is not None:
             self.weight = weight
             self.has_weight = False
         else:
-            self.weight = Parameter(torch.empty(self.num_classes, self.input_size_per_partition, **factory_kwargs))
+            self.weight = Parameter(torch.empty(self.num_classes, self.input_size_per_partition))
             self.has_weight = True
         if bias:
-            self.bias = Parameter(torch.empty(self.num_classes, **factory_kwargs))
+            self.bias = Parameter(torch.empty(self.num_classes))
         else:
             self.bias = None
         with seed(pm.PARALLEL_1D):
@@ -139,15 +152,15 @@ class Classifier1D(nn.Module):
 
 
 class VocabParallelClassifier1D(nn.Module):
+
     def __init__(
-        self,
-        in_features: int,
-        num_classes: int,
-        weight: Parameter = None,
-        bias: bool = True,
-        dtype: torch.dtype = None,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+            self,
+            in_features: int,
+            num_classes: int,
+            weight: Parameter = None,
+            bias: bool = True,
+            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
     ):
         super().__init__()
         self.in_features = in_features
@@ -159,15 +172,14 @@ class VocabParallelClassifier1D(nn.Module):
 
         # Parameters.
         # Initialize weight.
-        factory_kwargs = {"device": get_current_device(), "dtype": dtype}
         if weight is not None:
             self.weight = weight
             self.has_weight = False
         else:
-            self.weight = Parameter(torch.empty(self.num_classes_per_partition, self.in_features, **factory_kwargs))
+            self.weight = Parameter(torch.empty(self.num_classes_per_partition, self.in_features))
             self.has_weight = True
         if bias:
-            self.bias = Parameter(torch.empty(self.num_classes_per_partition, **factory_kwargs))
+            self.bias = Parameter(torch.empty(self.num_classes_per_partition))
         else:
             self.bias = None
         with seed(pm.PARALLEL_1D):
@@ -199,16 +211,16 @@ class VocabParallelClassifier1D(nn.Module):
 
 
 class Linear1D_Col(nn.Module):
+
     def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        bias: bool = True,
-        dtype: torch.dtype = None,
-        gather_output: bool = False,
-        skip_bias_add: bool = False,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+            self,
+            in_features: int,
+            out_features: int,
+            bias: bool = True,
+            gather_output: bool = False,
+            skip_bias_add: bool = False,
+            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
     ):
         super().__init__()
 
@@ -225,11 +237,10 @@ class Linear1D_Col(nn.Module):
 
         # Parameters.
         # Initialize weight.
-        factory_kwargs = {"device": get_current_device(), "dtype": dtype}
-        self.weight = Parameter(torch.empty(self.out_features_per_partition, self.in_features, **factory_kwargs))
+        self.weight = Parameter(torch.empty(self.out_features_per_partition, self.in_features))
 
         if bias:
-            self.bias = Parameter(torch.empty(self.out_features_per_partition, **factory_kwargs))
+            self.bias = Parameter(torch.empty(self.out_features_per_partition))
         else:
             self.bias = None
         with seed(pm.PARALLEL_1D):
@@ -268,16 +279,16 @@ class Linear1D_Col(nn.Module):
 
 
 class Linear1D_Row(nn.Module):
+
     def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        bias: bool = True,
-        dtype: torch.dtype = None,
-        parallel_input: bool = True,
-        skip_bias_add: bool = False,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+            self,
+            in_features: int,
+            out_features: int,
+            bias: bool = True,
+            parallel_input: bool = True,
+            skip_bias_add: bool = False,
+            weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+            bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
     ):
         super().__init__()
 
@@ -295,11 +306,10 @@ class Linear1D_Row(nn.Module):
 
         # Parameters.
         # Initialize weight.
-        factory_kwargs = {"device": get_current_device(), "dtype": dtype}
-        self.weight = Parameter(torch.empty(self.out_features, self.input_size_per_partition, **factory_kwargs))
+        self.weight = Parameter(torch.empty(self.out_features, self.input_size_per_partition))
 
         if bias:
-            self.bias = Parameter(torch.empty(self.out_features, **factory_kwargs))
+            self.bias = Parameter(torch.empty(self.out_features))
         else:
             self.bias = None
         with seed(pm.PARALLEL_1D):
@@ -337,16 +347,14 @@ class Linear1D_Row(nn.Module):
 
 
 class Embedding1D(nn.Module):
-    def __init__(
-        self,
-        num_embeddings: int,
-        embedding_dim: int,
-        padding_idx: int = None,
-        dtype: torch.dtype = None,
-        weight_initializer: Callable = init.normal_(),
-        *args,
-        **kwargs
-    ):
+
+    def __init__(self,
+                 num_embeddings: int,
+                 embedding_dim: int,
+                 padding_idx: int = None,
+                 weight_initializer: Callable = init.normal_(),
+                 *args,
+                 **kwargs):
         super().__init__()
 
         self.num_embeddings = num_embeddings
@@ -357,9 +365,7 @@ class Embedding1D(nn.Module):
         self.embed_args = args
         self.embed_kwargs = kwargs
 
-        self.weight = Parameter(
-            torch.empty((num_embeddings, embed_dim_per_partition), device=get_current_device(), dtype=dtype)
-        )
+        self.weight = Parameter(torch.empty((num_embeddings, embed_dim_per_partition)))
 
         self.reset_parameters(weight_initializer)
         self._set_tensor_parallel_attributes()
@@ -389,16 +395,14 @@ class Embedding1D(nn.Module):
 
 
 class VocabParallelEmbedding1D(torch.nn.Module):
-    def __init__(
-        self,
-        num_embeddings: int,
-        embedding_dim: int,
-        padding_idx: int = None,
-        dtype: torch.dtype = None,
-        weight_initializer: Callable = init.normal_(),
-        *args,
-        **kwargs
-    ):
+
+    def __init__(self,
+                 num_embeddings: int,
+                 embedding_dim: int,
+                 padding_idx: int = None,
+                 weight_initializer: Callable = init.normal_(),
+                 *args,
+                 **kwargs):
         super().__init__()
         self.num_embeddings = num_embeddings
         self.embed_dim = embedding_dim
@@ -412,9 +416,7 @@ class VocabParallelEmbedding1D(torch.nn.Module):
         self.vocab_start_index = tensor_parallel_rank * self.num_embeddings_per_partition
         self.vocab_end_index = self.vocab_start_index + self.num_embeddings_per_partition
 
-        self.weight = Parameter(
-            torch.empty((self.num_embeddings_per_partition, self.embed_dim), device=get_current_device(), dtype=dtype)
-        )
+        self.weight = Parameter(torch.empty((self.num_embeddings_per_partition, self.embed_dim)))
 
         self.reset_parameters(weight_initializer)
         self._set_tensor_parallel_attributes()
@@ -431,11 +433,8 @@ class VocabParallelEmbedding1D(torch.nn.Module):
             self._fill_padding_idx_with_zero()
 
     def _fill_padding_idx_with_zero(self) -> None:
-        if (
-            self.padding_idx is not None
-            and self.padding_idx >= self.vocab_start_index
-            and self.padding_idx < self.vocab_end_index
-        ):
+        if (self.padding_idx is not None and self.padding_idx >= self.vocab_start_index
+                and self.padding_idx < self.vocab_end_index):
             with torch.no_grad():
                 self.weight[self.padding_idx - self.vocab_start_index].fill_(0)
 
@@ -446,9 +445,8 @@ class VocabParallelEmbedding1D(torch.nn.Module):
         masked_input = input_.clone() - self.vocab_start_index
         masked_input[input_mask] = 0
 
-        output_parallel = F.embedding(
-            masked_input, self.weight, self.padding_idx, *self.embed_args, **self.embed_kwargs
-        )
+        output_parallel = F.embedding(masked_input, self.weight, self.padding_idx, *self.embed_args,
+                                      **self.embed_kwargs)
 
         # Mask the output embedding.
         output_parallel[input_mask, :] = 0.0
@@ -458,6 +456,7 @@ class VocabParallelEmbedding1D(torch.nn.Module):
 
 
 class Dropout1D(nn.Module):
+
     def __init__(self, p: float = 0.5, inplace: bool = False):
         super().__init__()
         self.parallel_input = get_parallel_input()
@@ -473,28 +472,44 @@ class Dropout1D(nn.Module):
         return output
 
 
-class PatchEmbedding1D(CubeModule):
-    def __init__(
-        self,
-        img_size: int,
-        patch_size: int,
-        in_chans: int,
-        embed_size: int,
-        dtype: torch.dtype = None,
-        flatten: bool = True,
-        weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
-        bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
-        position_embed_initializer: Callable = init.zeros_(),
-    ):
-        embed = PatchEmbeddingSTD(
+class PatchEmbedding1D(nn.Module):
+
+    def __init__(self,
+                 img_size: int,
+                 patch_size: int,
+                 in_chans: int,
+                 embed_size: int,
+                 flatten: bool = True,
+                 weight_initializer: Callable = init.kaiming_uniform_(a=math.sqrt(5)),
+                 bias_initializer: Callable = init.xavier_uniform_(a=1, scale=1),
+                 position_embed_initializer: Callable = init.zeros_()):
+        super().__init__()
+        self.embed = PatchEmbeddingSTD(
             img_size,
             patch_size,
             in_chans,
             embed_size,
-            dtype=dtype,
             flatten=flatten,
             weight_initializer=weight_initializer,
             bias_initializer=bias_initializer,
             position_embed_initializer=position_embed_initializer,
         )
-        super().__init__(embed)
+
+    def forward(self, *args, **kwargs):
+        return self.embed(*args, **kwargs)
+
+    @property
+    def weight(self):
+        return self.embed.weight
+
+    @property
+    def bias(self):
+        return self.embed.bias
+
+    @property
+    def cls_token(self):
+        return self.embed.cls_token
+
+    @property
+    def pos_embed(self):
+        return self.embed.pos_embed

@@ -18,7 +18,7 @@ def get_dataloader(dataset, batch_size, shuffle=False, seed=1024, **kwargs):
 
     return DataLoader(
         dataset,
-        batch_size=batch_size // world_size,
+        batch_size=batch_size,
         shuffle=(shuffle and sampler is None),
         sampler=sampler,
         worker_init_fn=seed_worker,

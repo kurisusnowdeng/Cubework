@@ -1,7 +1,6 @@
 import torch.nn as nn
 from cubework.global_vars import env
 
-from .._entry_module import CubeModule
 from ..utils import get_tensor_parallel_mode
 from .loss_1d import VocabParallelCrossEntropyLoss1D
 from .loss_2d import CrossEntropyLoss2D, VocabParallelCrossEntropyLoss2D
@@ -19,14 +18,18 @@ _vocab_parallel_cross_entropy = {
 }
 
 
-class CrossEntropyLoss(CubeModule):
+class CrossEntropyLoss(nn.Module):
+
     def __init__(self, reduction: bool = True, *args, **kwargs):
+        super().__init__()
         tensor_parallel = get_tensor_parallel_mode()
         if tensor_parallel is not None and env.vocab_parallel:
-            loss = _vocab_parallel_cross_entropy[tensor_parallel](reduction=reduction, *args, **kwargs)
+            self.loss = _vocab_parallel_cross_entropy[tensor_parallel](reduction=reduction, *args, **kwargs)
         elif tensor_parallel is None or tensor_parallel == "1d":
             reduction = "mean" if reduction else "none"
-            loss = nn.CrossEntropyLoss(reduction=reduction, *args, **kwargs)
+            self.loss = nn.CrossEntropyLoss(reduction=reduction, *args, **kwargs)
         else:
-            loss = _parallel_cross_entropy[tensor_parallel](reduction=reduction, *args, **kwargs)
-        super().__init__(loss)
+            self.loss = _parallel_cross_entropy[tensor_parallel](reduction=reduction, *args, **kwargs)
+
+    def forward(self, *args, **kwargs):
+        return self.loss(*args, **kwargs)
